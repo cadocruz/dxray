@@ -1,4 +1,4 @@
-//! The `--game` listing: which executable in an install directory is the game.
+//! The `game` listing: which executable in an install directory is the game.
 //!
 //! The judgement is `dxray-core`'s; this module only lays it out. It prints the
 //! whole ranking and then analyses the top of it, in that order, because the
@@ -39,7 +39,7 @@ pub struct Outcome {
     /// at one directory and a file in it went unlooked-at.
     ///
     /// A ranking with no import table behind it is not: everything was read and
-    /// this is what it says, which is the same division `--steam` draws between
+    /// this is what it says, which is the same division `steam` draws between
     /// a problem and a caveat. Both commands ask
     /// [`Survey::is_incomplete`](dxray_core::game::Survey::is_incomplete) for
     /// the first half, so one directory cannot be complete on one surface and
@@ -48,18 +48,23 @@ pub struct Outcome {
 }
 
 /// Ranks the executables under `dir` and analyses the best of them.
-pub fn inspect(dir: &Path, json: bool) -> Outcome {
+pub fn inspect(dir: &Path, json: bool, presentation: report::Presentation) -> Outcome {
     let survey = match dxray_core::candidates(dir, None) {
         Ok(survey) => survey,
-        Err(error) => return failure(dir, &error, json),
+        Err(error) => return failure(dir, &error, json, presentation),
     };
     let Some(best) = survey.best() else {
         // The directory listed fine and holds no program at all. Treated as a
         // failure here, where the question asked was "which executable in this
         // directory is the game" and there is no executable to answer with. In
-        // `--steam`, which sweeps every install on the machine and meets games
+        // `steam`, which sweeps every install on the machine and meets games
         // that are mid-download, the same state is reported and costs nothing.
-        return failure(dir, &"no executable found in this directory", json);
+        return failure(
+            dir,
+            &"no executable found in this directory",
+            json,
+            presentation,
+        );
     };
 
     let record = Record::read(&best.path);
@@ -74,6 +79,37 @@ pub fn inspect(dir: &Path, json: bool) -> Outcome {
         let mut line = json_line(dir, &survey, &record);
         line.push('\n');
         line
+    } else if presentation != report::Presentation::Standard {
+        let identity = if presentation == report::Presentation::Full {
+            std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf())
+        } else {
+            dir.to_path_buf()
+        };
+        let mut text = format!("Install: {}\n", identity.display());
+        if presentation == report::Presentation::Full {
+            let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+            text.push_str(&ranking_paths(&absolute, &survey, true));
+            let selected = std::path::absolute(&best.path).unwrap_or_else(|_| best.path.clone());
+            labelled(&mut text, "selected", &selected.display().to_string());
+            labelled(
+                &mut text,
+                "score",
+                &format!("{}; {} candidates", best.score(), survey.candidates.len()),
+            );
+        } else {
+            if !survey.has_evidence() {
+                labelled(
+                    &mut text,
+                    "caveat",
+                    "No executable carries evidence of being the game; selection is only the highest-ranked candidate.",
+                );
+            }
+            for note in &survey.notes {
+                labelled(&mut text, "caveat", &note.to_string());
+            }
+        }
+        text.push_str(&report::present(&record, presentation));
+        text
     } else {
         let mut text = ranking(dir, &survey);
         text.push('\n');
@@ -86,20 +122,29 @@ pub fn inspect(dir: &Path, json: bool) -> Outcome {
 /// A directory that could not be surveyed at all, in whichever shape was asked
 /// for. It stays a row rather than becoming a missing one, so a harness can
 /// still line results up with inputs without counting.
-fn failure(dir: &Path, error: &dyn std::fmt::Display, json: bool) -> Outcome {
+fn failure(
+    dir: &Path,
+    error: &dyn std::fmt::Display,
+    json: bool,
+    presentation: report::Presentation,
+) -> Outcome {
     let record = Record::failed(dir, error);
     let text = if json {
         let mut line = json_line(dir, &Survey::default(), &record);
         line.push('\n');
         line
     } else {
-        report::render(&record)
+        report::present(&record, presentation)
     };
     Outcome { text, failed: true }
 }
 
 /// The ranked block: every executable, its score, and the sentences behind it.
 fn ranking(dir: &Path, survey: &Survey) -> String {
+    ranking_paths(dir, survey, false)
+}
+
+fn ranking_paths(dir: &Path, survey: &Survey, full_paths: bool) -> String {
     let mut out = String::with_capacity(512);
     let _ = writeln!(out, "{}", dir.display());
     labelled(
@@ -113,12 +158,19 @@ fn ranking(dir: &Path, survey: &Survey) -> String {
     );
 
     for (i, candidate) in survey.candidates.iter().enumerate() {
-        let shown = candidate
-            .path
-            .strip_prefix(dir)
-            .unwrap_or(&candidate.path)
-            .display()
-            .to_string();
+        let shown = if full_paths {
+            std::path::absolute(&candidate.path)
+                .unwrap_or_else(|_| candidate.path.clone())
+                .display()
+                .to_string()
+        } else {
+            candidate
+                .path
+                .strip_prefix(dir)
+                .unwrap_or(&candidate.path)
+                .display()
+                .to_string()
+        };
         let rank = i + 1;
         let score = candidate.score();
         let _ = write!(out, "  {rank:>3} {score:>5}  ");
@@ -183,7 +235,7 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
 ///
 /// The thirteen keys of a record come through untouched and in their order —
 /// the first eight of them are a frozen positional contract — and everything
-/// this mode adds goes after them. A harness that knows nothing about `--game`
+/// this mode adds goes after them. A harness that knows nothing about `game`
 /// reads such a line exactly as it reads any other.
 fn json_line(dir: &Path, survey: &Survey, record: &Record) -> String {
     let mut out = record.to_json();
@@ -229,7 +281,7 @@ fn json_line(dir: &Path, survey: &Survey, record: &Record) -> String {
     out
 }
 
-/// What one game's directory produced for the `--installed` and `--steam` listing.
+/// What one game's directory produced for the `installed` and `steam` listing.
 ///
 /// The rows are what gets printed; `incomplete` is what the exit code is drawn
 /// from; `carries_evidence` is what the listing orders by. They come back
@@ -272,7 +324,7 @@ impl Best {
 ///
 /// Deliberately short. A library can hold a hundred games and the full ranking
 /// for each of them would bury the listing, so this shows the answer and the
-/// single strongest reason for it. `dxray --game <path>` shows the rest.
+/// single strongest reason for it. `dxray game <path>` shows the rest.
 ///
 /// The ranking arrives already done, from
 /// [`dxray_core::inspect`](dxray_core::inspect()), rather than being asked for
@@ -334,11 +386,11 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
             .first()
             .map_or_else(String::new, ToString::to_string);
         // The tie is not computed here. It arrives as `Note::TiedAtTheTop`,
-        // from the same place `--game` gets it, so the two surfaces cannot end
+        // from the same place `game` gets it, so the two surfaces cannot end
         // up disagreeing about whether one run had a tie in it.
         rows.push(("best", format!("{shown}  ({}: {why})", best.score())));
     } else {
-        // The caveat cannot be left to the `--game` view. A row reading
+        // The caveat cannot be left to the `game` view. A row reading
         // "vcredist_x64.exe (0: )" under a Steam title reads as an answer, and
         // the number is not what anybody takes away from it.
         rows.push((
@@ -356,7 +408,7 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
         let text = match note {
             Note::NoRendererImported { .. } => {
                 "nothing here imports a graphics API, so this ranking rests on directory \
-                 structure alone; dxray --game on this path explains what that means"
+                 structure alone; dxray game on this path explains what that means"
                     .to_owned()
             }
             // Shortened for the same reason and never dropped. This is the one
@@ -373,7 +425,7 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
             // Nothing reaches it today; this is what it costs to keep it that
             // way, and the field cannot be made private while the variant is.
             Note::TiedAtTheTop { count, .. } => format!(
-                "tied with {} other{}, which --game lists; the evidence does not choose \
+                "tied with {} other{}, which game lists; the evidence does not choose \
                  between them",
                 count.saturating_sub(1),
                 if *count == 2 { "" } else { "s" }
@@ -391,7 +443,7 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
 
 /// The notes that mean something in this game's directory was never looked at.
 ///
-/// The selection is [`Survey::incomplete_notes`], so that `--game`, `--steam`
+/// The selection is [`Survey::incomplete_notes`], so that `game`, `steam`
 /// and the terminal browser draw the line in the same place and a person cannot
 /// get one story from one surface and a different one from the other. This
 /// function only words them; it decides nothing.
@@ -726,7 +778,7 @@ mod tests {
 
     #[test]
     fn the_json_line_keeps_the_frozen_eight_keys_at_the_front_and_appends_after_them() {
-        // A harness reads them positionally. `--game` may extend a record; it
+        // A harness reads them positionally. `game` may extend a record; it
         // may not reshape one.
         let line = json_line(Path::new("/games/App"), &survey(), &record());
 

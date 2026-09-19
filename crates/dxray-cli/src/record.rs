@@ -92,7 +92,7 @@ impl Record {
         let neighbours = cache.neighbours(path);
         // The same one-link chase the ranking does, through the one function
         // that knows how to do it. A record that skipped it would call a Unity
-        // stub "no graphics API determined" while `--game` called it Direct3D,
+        // stub "no graphics API determined" while `game` called it Direct3D,
         // about the same file in the same run.
         let linked = cache.follow(path, &imports, &delay_imports, &neighbours);
         let evidence = Evidence {

@@ -1,4 +1,4 @@
-//! End to end tests for `--installed`: the real binary, a fake machine with two
+//! End to end tests for `installed`: the real binary, a fake machine with two
 //! launchers on it, real exit codes.
 //!
 //! The trees are built here rather than found on the machine because there is
@@ -40,7 +40,7 @@ fn fake_steam(home: &TempDir) -> PathBuf {
 }
 
 /// Adds a second Steam manifest for content Steam labels as a tool.  The
-/// command-line inventory deliberately includes it: `--installed` answers
+/// command-line inventory deliberately includes it: `installed` answers
 /// what Steam says is installed, not the narrower question of what is
 /// launchable as a user game.
 fn fake_steam_tool(home: &TempDir) -> PathBuf {
@@ -88,14 +88,14 @@ fn fake_heroic(home: &TempDir, with_game: bool) -> PathBuf {
 
 #[test]
 fn every_launcher_on_the_machine_is_listed_and_each_game_says_which_one() {
-    // The whole point of the flag. Somebody scripting `dxray --steam` to audit
+    // The whole point of the flag. Somebody scripting `dxray steam` to audit
     // their library got an incomplete answer with no signal that it was
     // incomplete: the Heroic games were simply not there.
     let home = TempDir::new("games-both");
     let steam = fake_steam(&home);
     let heroic = fake_heroic(&home, true);
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     for root in [&steam, &heroic] {
@@ -126,7 +126,7 @@ fn installed_keeps_the_complete_steam_inventory_including_proton() {
     let home = TempDir::new("installed-steam-game-and-proton");
     fake_steam_tool(&home);
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     for (appid, name) in [("570", "Dota 2"), ("1493710", "Proton Experimental")] {
@@ -152,7 +152,7 @@ fn one_trailer_counts_both_launchers_rather_than_one_per_launcher() {
     fake_steam(&home);
     fake_heroic(&home, true);
 
-    let text = stdout_of(&dxray_with_home(home.path(), ["--installed"])).to_owned();
+    let text = stdout_of(&dxray_with_home(home.path(), ["installed"])).to_owned();
 
     assert!(
         text.contains("2 games in 2 libraries across 2 installs"),
@@ -173,7 +173,7 @@ fn a_machine_with_only_one_launcher_on_it_gets_an_honest_trailer() {
     let home = TempDir::new("games-heroic-only");
     fake_heroic(&home, true);
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -200,7 +200,7 @@ fn an_installed_launcher_holding_nothing_is_counted_rather_than_hidden() {
     let home = TempDir::new("games-heroic-empty");
     let root = fake_heroic(&home, false);
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -236,7 +236,7 @@ fn a_launcher_that_cannot_be_read_does_not_hide_the_other_launcher_s_games() {
     )
     .expect("truncate the index");
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -274,7 +274,7 @@ fn a_stale_heroic_record_for_a_game_that_was_found_anyway_leaves_the_scan_clean(
     )
     .expect("a record that lost its install path");
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -319,7 +319,7 @@ fn a_stale_heroic_record_for_a_game_that_was_found_anyway_leaves_the_scan_clean(
     // And the same sentence where a program reads it. `caveats` is the clause
     // list the trailer is built from, so a wrong clause is wrong on both
     // surfaces at once — which is the point of there being one list.
-    let json = dxray_with_home(home.path(), ["--installed", "--json"]);
+    let json = dxray_with_home(home.path(), ["installed", "--json"]);
     let stream = stdout_of(&json);
 
     assert!(
@@ -346,7 +346,7 @@ fn a_machine_with_no_launcher_at_all_says_where_it_looked_under_each_name() {
     // does not tell anybody which of them was a Heroic that is not there.
     let home = TempDir::new("games-nothing");
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stderr_of(&out);
 
     assert!(
@@ -368,7 +368,7 @@ fn a_machine_with_no_launcher_at_all_says_where_it_looked_under_each_name() {
 
 #[test]
 fn the_narrower_flag_still_answers_only_the_narrower_question() {
-    // `--steam` is kept because it is honest about what it answers. On a
+    // `steam` is kept because it is honest about what it answers. On a
     // machine with both launchers it must still show Steam and only Steam, and
     // it must not start labelling every row with the one launcher the flag
     // already named.
@@ -376,7 +376,7 @@ fn the_narrower_flag_still_answers_only_the_narrower_question() {
     fake_steam(&home);
     fake_heroic(&home, true);
 
-    let text = stdout_of(&dxray_with_home(home.path(), ["--steam"])).to_owned();
+    let text = stdout_of(&dxray_with_home(home.path(), ["steam"])).to_owned();
 
     assert!(text.contains("Dota 2"), "got:\n{text}");
     assert!(
@@ -394,16 +394,11 @@ fn the_narrower_flag_still_answers_only_the_narrower_question() {
 }
 
 #[test]
-fn games_needs_no_paths_and_still_refuses_the_flags_that_name_another_question() {
-    // `--json` is no longer among them: it names a rendering, not a question,
-    // and the listing has a shape of its own that cannot be mistaken for the
-    // record line. The rest stay refused because each of them names a
-    // *different question*, and a run that silently answered one of them would
-    // be guessing which.
+fn installed_accepts_json_but_rejects_paths_and_recursive() {
     let home = TempDir::new("games-flags");
     fake_steam(&home);
 
-    for accepted in [vec!["--installed"], vec!["--installed", "--json"]] {
+    for accepted in [vec!["installed"], vec!["installed", "--json"]] {
         let out = dxray_with_home(home.path(), accepted.clone());
         assert_eq!(
             out.status.code(),
@@ -413,9 +408,9 @@ fn games_needs_no_paths_and_still_refuses_the_flags_that_name_another_question()
         );
     }
     for refused in [
-        vec!["--installed", "--steam"],
-        vec!["--installed", "--recursive"],
-        vec!["--installed", "--game"],
+        vec!["installed", "steam"],
+        vec!["installed", "--recursive"],
+        vec!["installed", "game"],
     ] {
         let out = dxray_with_home(home.path(), refused.clone());
         assert_eq!(
@@ -470,8 +465,8 @@ fn the_json_listing_carries_everything_the_terminal_listing_carries() {
     let home = TempDir::new("games-json");
     let (steam, heroic) = crowded(&home);
 
-    let human = dxray_with_home(home.path(), ["--installed"]);
-    let machine = dxray_with_home(home.path(), ["--installed", "--json"]);
+    let human = dxray_with_home(home.path(), ["installed"]);
+    let machine = dxray_with_home(home.path(), ["installed", "--json"]);
     let text = stdout_of(&human);
     let json = stdout_of(&machine);
 
@@ -558,8 +553,8 @@ fn asking_for_json_changes_the_rendering_and_nothing_a_run_calls_a_failure() {
         (&clean_home, Some(0)),
         (&empty_home, Some(1)),
     ] {
-        let human = dxray_with_home(home.path(), ["--installed"]);
-        let machine = dxray_with_home(home.path(), ["--installed", "--json"]);
+        let human = dxray_with_home(home.path(), ["installed"]);
+        let machine = dxray_with_home(home.path(), ["installed", "--json"]);
 
         assert_eq!(human.status.code(), expected);
         assert_eq!(
@@ -584,7 +579,7 @@ fn a_machine_with_no_launcher_answers_json_with_a_sentence_rather_than_nothing()
     // person is told on stderr.
     let home = TempDir::new("games-json-nothing");
 
-    let out = dxray_with_home(home.path(), ["--installed", "--json"]);
+    let out = dxray_with_home(home.path(), ["installed", "--json"]);
     let json = stdout_of(&out);
 
     assert_eq!(json.lines().count(), 1, "got:\n{json}");
@@ -602,15 +597,13 @@ fn a_machine_with_no_launcher_answers_json_with_a_sentence_rather_than_nothing()
 
 #[test]
 fn a_path_given_alongside_games_is_a_usage_error_rather_than_a_silently_ignored_argument() {
-    // `dxray <path> --installed` would open nothing and say nothing about it while
-    // exiting 0 — a run that looked at none of its arguments, wearing a clean
-    // run's clothes.
+    // Explicit paths are not part of the installed command's argument schema.
     let home = TempDir::new("games-path");
     fake_steam(&home);
     let file = home.path().join("image.exe");
     std::fs::write(&file, Image::x64().build()).expect("a file to be ignored");
 
-    let out = dxray_with_home(home.path(), [Path::new("--installed"), file.as_path()]);
+    let out = dxray_with_home(home.path(), [Path::new("installed"), file.as_path()]);
 
     assert_eq!(out.status.code(), Some(2), "got:\n{}", stderr_of(&out));
 }
@@ -623,9 +616,9 @@ fn the_help_names_the_flag_and_what_its_exit_codes_mean() {
     let out = dxray_with_home(TempDir::new("games-help").path(), ["--help"]);
     let text = stdout_of(&out);
 
-    assert!(text.contains("--installed"), "got:\n{text}");
+    assert!(text.contains("installed"), "got:\n{text}");
     assert!(
-        text.contains("--installed or --steam found no install"),
+        text.contains("installed or steam found no install"),
         "the 1 has to cover the new flag too, got:\n{text}"
     );
 }
@@ -654,7 +647,7 @@ fn the_demoted_half_of_one_library_does_not_sink_past_the_next_library() {
     )
     .expect("executable");
 
-    let out = dxray_with_home(home.path(), ["--installed"]);
+    let out = dxray_with_home(home.path(), ["installed"]);
     let text = stdout_of(&out);
 
     let game = text.find("dota 2 beta").expect("the Steam game is listed");
@@ -694,7 +687,7 @@ fn a_failure_in_a_launchers_own_index_names_no_library_in_the_json() {
     )
     .expect("truncate the index");
 
-    let out = dxray_with_home(home.path(), ["--installed", "--json"]);
+    let out = dxray_with_home(home.path(), ["installed", "--json"]);
     let json = stdout_of(&out);
 
     let failure = json

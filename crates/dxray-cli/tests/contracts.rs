@@ -71,7 +71,12 @@ fn file_jsonl_preserves_schema_and_keeps_failures_in_records() {
     let bad = home.write("bad.exe", b"invalid image");
     let out = dxray_with_home(
         home.path(),
-        [OsStr::new("--json"), good.as_os_str(), bad.as_os_str()],
+        [
+            OsStr::new("inspect"),
+            OsStr::new("--json"),
+            good.as_os_str(),
+            bad.as_os_str(),
+        ],
     );
     let rows = records(&out, 1);
     assert_eq!(rows.len(), 2);
@@ -94,7 +99,14 @@ fn file_jsonl_preserves_schema_and_keeps_failures_in_records() {
     assert!(rows[1]["error"].is_string());
     assert!(rows[1]["machine"].is_null());
     assert_eq!(rows[1]["imports"], json!([]));
-    let clean = dxray_with_home(home.path(), [OsStr::new("--json"), good.as_os_str()]);
+    let clean = dxray_with_home(
+        home.path(),
+        [
+            OsStr::new("inspect"),
+            OsStr::new("--json"),
+            good.as_os_str(),
+        ],
+    );
     assert_eq!(records(&clean, 0).len(), 1);
     assert!(clean.stderr.is_empty());
 }
@@ -107,7 +119,7 @@ fn game_schema_and_static_caveat_do_not_imply_a_failed_scan() {
     let out = dxray_with_home(
         home.path(),
         [
-            OsStr::new("--game"),
+            OsStr::new("game"),
             OsStr::new("--json"),
             directory.as_os_str(),
         ],
@@ -139,11 +151,7 @@ fn game_schema_and_static_caveat_do_not_imply_a_failed_scan() {
     std::fs::create_dir(&empty).unwrap();
     let failed = dxray_with_home(
         home.path(),
-        [
-            OsStr::new("--game"),
-            OsStr::new("--json"),
-            empty.as_os_str(),
-        ],
+        [OsStr::new("game"), OsStr::new("--json"), empty.as_os_str()],
     );
     let failure = records(&failed, 1);
     keys(
@@ -159,7 +167,7 @@ fn game_schema_and_static_caveat_do_not_imply_a_failed_scan() {
 fn both_inventory_modes_have_tagged_schemas_and_stderr_problems() {
     let home = TempDir::new("contract-inventory");
     steam(&home);
-    for mode in ["--steam", "--installed"] {
+    for mode in ["steam", "installed"] {
         let out = dxray_with_home(home.path(), [mode, "--json"]);
         let rows = records(&out, 0);
         assert_eq!(
@@ -194,7 +202,7 @@ fn both_inventory_modes_have_tagged_schemas_and_stderr_problems() {
         ".steam/steam/steamapps/appmanifest_99.acf",
         b"\"AppState\" {",
     );
-    for mode in ["--steam", "--installed"] {
+    for mode in ["steam", "installed"] {
         let out = dxray_with_home(home.path(), [mode, "--json"]);
         let rows = records(&out, 1);
         let problem = rows.iter().find(|r| r["kind"] == "problem").unwrap();
@@ -222,7 +230,7 @@ fn a_redundant_heroic_record_is_a_note_not_a_stderr_problem() {
         ".config/heroic/store_cache/gog_library.json",
         br#"{"library":[{"app_name":"42","title":"Sample","is_installed":true}]}"#,
     );
-    let out = dxray_with_home(home.path(), ["--installed", "--json"]);
+    let out = dxray_with_home(home.path(), ["installed", "--json"]);
     let rows = records(&out, 0);
     let note = rows.iter().find(|r| r["kind"] == "note").unwrap();
     keys(
@@ -240,7 +248,7 @@ fn a_redundant_heroic_record_is_a_note_not_a_stderr_problem() {
 #[test]
 fn no_launcher_is_one_problem_without_a_summary() {
     let home = TempDir::new("contract-no-launcher");
-    for mode in ["--steam", "--installed"] {
+    for mode in ["steam", "installed"] {
         let out = dxray_with_home(home.path(), [mode, "--json"]);
         let rows = records(&out, 1);
         assert_eq!(rows.len(), 1);
@@ -262,8 +270,8 @@ fn piped_human_file_and_game_output_is_plain_text() {
         &Image::x64().importing(&["d3d11.dll"]).build(),
     );
     for args in [
-        vec![file.as_os_str()],
-        vec![OsStr::new("--game"), file.parent().unwrap().as_os_str()],
+        vec![OsStr::new("inspect"), file.as_os_str()],
+        vec![OsStr::new("game"), file.parent().unwrap().as_os_str()],
     ] {
         let out = dxray_with_home(home.path(), args);
         assert_eq!(out.status.code(), Some(0));
@@ -277,9 +285,9 @@ fn piped_human_file_and_game_output_is_plain_text() {
 fn usage_errors_are_stderr_only_and_exit_two_even_with_json() {
     let home = TempDir::new("contract-usage");
     for args in [
-        vec!["--json", "--unknown-option"],
-        vec!["--json", "--game", "--installed"],
-        vec!["--json", "--steam", "--installed"],
+        vec!["inspect", "--json", "--unknown-option"],
+        vec!["game", "--json", "--recursive", "."],
+        vec!["steam", "--json", "--appid", "1"],
     ] {
         let out = dxray_with_home(home.path(), args);
         assert_eq!(out.status.code(), Some(2));
@@ -297,12 +305,9 @@ fn hostile_names_and_paths_round_trip_without_splitting_jsonl() {
     let file = home.write(&format!("{name}/Game.exe"), &Image::x64().build());
     for (mode, target) in [
         (None, file.as_path()),
-        (Some("--game"), file.parent().unwrap()),
+        (Some("game"), file.parent().unwrap()),
     ] {
-        let mut args = vec![OsStr::new("--json")];
-        if let Some(mode) = mode {
-            args.push(OsStr::new(mode));
-        }
+        let mut args = vec![OsStr::new(mode.unwrap_or("inspect")), OsStr::new("--json")];
         args.push(target.as_os_str());
         let out = dxray_with_home(home.path(), args);
         let rows = records(&out, 0);
@@ -319,7 +324,7 @@ fn hostile_names_and_paths_round_trip_without_splitting_jsonl() {
             .to_string()
             .as_bytes(),
     );
-    let out = dxray_with_home(home.path(), ["--installed", "--json"]);
+    let out = dxray_with_home(home.path(), ["installed", "--json"]);
     let rows = records(&out, 0);
     let game = rows.iter().find(|r| r["kind"] == "game").unwrap();
     assert_eq!(game["name"], name);

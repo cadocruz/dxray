@@ -1,4 +1,4 @@
-//! `--game` end to end: whole install layouts on disk, through the real binary.
+//! `game` end to end: whole install layouts on disk, through the real binary.
 //!
 //! The unit tests in `src/game.rs` prove the listing renders what it is given.
 //! These prove the walk, the ranking and the analysis line up behind one
@@ -50,7 +50,7 @@ fn the_shipping_binary_leads_the_ranking_and_is_the_one_that_gets_analysed() {
     let dir = TempDir::new("game-unreal");
     unreal(&dir);
 
-    let out = dxray(["--game", &dir.path().display().to_string()]);
+    let out = dxray(["game", &dir.path().display().to_string()]);
     let text = stdout_of(&out);
 
     assert!(
@@ -76,7 +76,7 @@ fn every_executable_is_listed_with_its_score_and_not_only_the_winner() {
     let dir = TempDir::new("game-listed");
     unreal(&dir);
 
-    let text = stdout_of(&dxray(["--game", &dir.path().display().to_string()])).to_owned();
+    let text = stdout_of(&dxray(["game", &dir.path().display().to_string()])).to_owned();
 
     for name in [
         "FactoryGame-Win64-Shipping.exe",
@@ -121,7 +121,7 @@ fn a_unity_stub_beats_the_crash_handler_that_shares_every_file_it_has() {
     dir.write("Cuphead_Data/resources.assets", b"x");
     dir.write("nvngx_dlss.dll", b"x");
 
-    let text = stdout_of(&dxray(["--game", &dir.path().display().to_string()])).to_owned();
+    let text = stdout_of(&dxray(["game", &dir.path().display().to_string()])).to_owned();
 
     assert!(
         position(&text, "Cuphead.exe") < position(&text, "UnityCrashHandler64.exe"),
@@ -152,7 +152,7 @@ fn a_directory_of_installers_is_reported_as_holding_no_game_and_still_exits_zero
         &Image::x64().importing(&["KERNEL32.dll"]).build(),
     );
 
-    let out = dxray(["--game", &dir.path().display().to_string()]);
+    let out = dxray(["game", &dir.path().display().to_string()]);
     let text = stdout_of(&out);
 
     assert!(
@@ -190,7 +190,7 @@ fn a_game_whose_renderer_loads_at_run_time_is_ranked_and_the_listing_says_why_th
         &Image::x64().importing(&["KERNEL32.dll", "jli.dll"]).build(),
     );
 
-    let text = stdout_of(&dxray(["--game", &dir.path().display().to_string()])).to_owned();
+    let text = stdout_of(&dxray(["game", &dir.path().display().to_string()])).to_owned();
 
     assert!(
         text.contains("rests on directory structure alone"),
@@ -208,12 +208,12 @@ fn a_game_whose_renderer_loads_at_run_time_is_ranked_and_the_listing_says_why_th
 
 #[test]
 fn the_json_line_appends_the_ranking_without_disturbing_the_frozen_keys() {
-    // A harness reads the first eight keys positionally. `--game` extends a
+    // A harness reads the first eight keys positionally. `game` extends a
     // record; it does not reshape one.
     let dir = TempDir::new("game-json");
     unreal(&dir);
 
-    let out = dxray(["--game", "--json", &dir.path().display().to_string()]);
+    let out = dxray(["game", "--json", &dir.path().display().to_string()]);
     let text = stdout_of(&out);
     let line = text.lines().next().expect("one line per directory");
 
@@ -243,12 +243,12 @@ fn the_json_line_appends_the_ranking_without_disturbing_the_frozen_keys() {
 #[test]
 fn a_directory_with_no_executable_in_it_fails_rather_than_printing_a_blank_ranking() {
     // The question asked was which executable here is the game, and there is no
-    // executable to answer with. In `--steam`, which sweeps a whole machine and
+    // executable to answer with. In `steam`, which sweeps a whole machine and
     // meets games that are mid-download, the same state costs nothing.
     let dir = TempDir::new("game-empty");
     dir.write("readme.txt", b"nothing to see");
 
-    let out = dxray(["--game", &dir.path().display().to_string()]);
+    let out = dxray(["game", &dir.path().display().to_string()]);
 
     assert!(
         stdout_of(&out).contains("no executable found in this directory"),
@@ -265,7 +265,7 @@ fn a_file_passed_to_the_game_flag_is_inspected_as_a_file() {
     let dir = TempDir::new("game-file");
     let exe = dir.write("lone.exe", &Image::x64().importing(&["d3d12.dll"]).build());
 
-    let out = dxray(["--game", &exe.display().to_string()]);
+    let out = dxray(["game", &exe.display().to_string()]);
 
     assert!(
         stdout_of(&out).contains("verdict   Direct3D 12"),
@@ -276,10 +276,9 @@ fn a_file_passed_to_the_game_flag_is_inspected_as_a_file() {
 }
 
 #[test]
-fn the_game_flag_and_the_steam_flag_refuse_to_share_a_command_line() {
-    // They answer different questions and print different shapes. Accepting
-    // both would mean deciding which one won, silently.
-    let out = dxray(["--game", "--steam"]);
+fn game_rejects_recursive_scan_option() {
+    // Recursive file walking belongs to inspect, not installation ranking.
+    let out = dxray(["game", "--recursive", "."]);
 
     assert_eq!(
         out.status.code(),
@@ -308,7 +307,7 @@ fn a_walk_that_stopped_at_its_limit_moves_the_exit_code_as_well_as_printing_a_no
     buried.push_str("real-game.exe");
     dir.write(&buried, &Image::x64().importing(&["d3d12.dll"]).build());
 
-    let out = dxray(["--game", &dir.path().display().to_string()]);
+    let out = dxray(["game", &dir.path().display().to_string()]);
     let text = stdout_of(&out);
 
     assert!(
@@ -337,7 +336,7 @@ fn a_thin_but_complete_answer_still_exits_zero() {
         &Image::x64().importing(&["KERNEL32.dll"]).build(),
     );
 
-    let out = dxray(["--game", &dir.path().display().to_string()]);
+    let out = dxray(["game", &dir.path().display().to_string()]);
 
     assert!(
         stdout_of(&out).contains("rests on directory structure alone"),
@@ -369,7 +368,7 @@ fn a_tie_for_first_place_is_declared_rather_than_settled_by_the_alphabet() {
             .build(),
     );
 
-    let out = dxray(["--game", &dir.path().display().to_string()]);
+    let out = dxray(["game", &dir.path().display().to_string()]);
     let text = stdout_of(&out);
     // The note is wrapped to the terminal width, so a phrase is asserted
     // against the text with its line breaks folded back into spaces.
@@ -401,7 +400,7 @@ fn a_ranking_the_evidence_actually_settled_carries_no_tie_note() {
     let dir = TempDir::new("game-clear");
     unreal(&dir);
 
-    let text = stdout_of(&dxray(["--game", &dir.path().display().to_string()])).to_owned();
+    let text = stdout_of(&dxray(["game", &dir.path().display().to_string()])).to_owned();
 
     assert!(
         !text.contains("share the top score"),

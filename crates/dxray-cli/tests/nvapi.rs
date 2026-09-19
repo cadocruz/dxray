@@ -1,4 +1,4 @@
-//! End to end tests for `--nvapi`, and for the NVAPI rows `--steam` grew: the
+//! End to end tests for `nvapi`, and for the NVAPI rows `steam` grew: the
 //! real binary, a fake Proton install, real exit codes.
 //!
 //! The scripts below are cut down from real Proton releases and keep the shapes
@@ -118,7 +118,7 @@ fn a_policy_is_reported_with_the_evidence_behind_it_and_not_just_a_list() {
     let dir = TempDir::new("nvapi-deny");
     let root = proton(&dir, "Proton 9.0", DENY);
 
-    let out = dxray([Path::new("--nvapi"), root.as_path()]);
+    let out = dxray([Path::new("nvapi"), root.as_path()]);
     let text = unwrapped(&out);
 
     assert!(out.status.success(), "a readable policy exits 0: {text}");
@@ -142,7 +142,7 @@ fn a_listed_game_and_an_unlisted_one_get_opposite_answers_from_one_build() {
     let root = proton(&dir, "Proton 9.0", DENY);
 
     let out = dxray([
-        "--nvapi",
+        "nvapi",
         &root.display().to_string(),
         "--appid",
         "1088850",
@@ -166,7 +166,7 @@ fn the_same_silence_means_the_opposite_thing_on_a_build_from_the_inverted_era() 
     let root = proton(&dir, "Proton 8.0", ALLOW);
 
     let out = dxray([
-        "--nvapi",
+        "nvapi",
         &root.display().to_string(),
         "--appid",
         "570",
@@ -199,7 +199,7 @@ fn a_conditional_block_prints_the_condition_rather_than_resolving_it() {
     let dir = TempDir::new("nvapi-conditional");
     let root = proton(&dir, "Proton 10.0", DENY);
 
-    let out = dxray(["--nvapi", &root.display().to_string(), "--appid", "108710"]);
+    let out = dxray(["nvapi", &root.display().to_string(), "--appid", "108710"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -229,7 +229,7 @@ fn a_test_wrapped_around_a_flat_block_is_printed_rather_than_waved_through() {
     let dir = TempDir::new("nvapi-wrapped");
     let root = proton(&dir, "Proton 11.0", WRAPPED);
 
-    let out = dxray(["--nvapi", &root.display().to_string(), "--appid", "1088850"]);
+    let out = dxray(["nvapi", &root.display().to_string(), "--appid", "1088850"]);
     let text = stdout_of(&out);
     let flat = unwrapped(&out);
 
@@ -261,7 +261,7 @@ fn a_build_read_in_full_with_no_nvapi_policy_is_a_finding_and_exits_zero() {
     let dir = TempDir::new("nvapi-truenegative");
     let root = proton(&dir, "Proton 7.0", NO_POLICY);
 
-    let out = dxray(["--nvapi", &root.display().to_string(), "--appid", "570"]);
+    let out = dxray(["nvapi", &root.display().to_string(), "--appid", "570"]);
     let text = unwrapped(&out);
 
     assert!(out.status.success(), "got a failure for: {text}");
@@ -278,7 +278,7 @@ fn a_build_whose_policy_could_not_be_read_is_not_that_same_answer() {
     let dir = TempDir::new("nvapi-hidden");
     let root = proton(&dir, "Proton 11.0", UNREADABLE);
 
-    let out = dxray(["--nvapi", &root.display().to_string(), "--appid", "1088850"]);
+    let out = dxray(["nvapi", &root.display().to_string(), "--appid", "1088850"]);
     let text = unwrapped(&out);
 
     assert!(!out.status.success(), "got 0 for: {text}");
@@ -300,7 +300,7 @@ fn a_build_with_nvapi_lists_and_no_direction_does_not_deny_the_lists_it_just_pri
     let dir = TempDir::new("nvapi-forceonly");
     let root = proton(&dir, "Proton 9.0", FORCE_ONLY);
 
-    let out = dxray(["--nvapi", &root.display().to_string(), "--appid", "1088850"]);
+    let out = dxray(["nvapi", &root.display().to_string(), "--appid", "1088850"]);
     let text = unwrapped(&out);
 
     assert!(!out.status.success(), "the direction was not settled");
@@ -326,10 +326,7 @@ fn a_file_that_defeats_the_reader_is_named_once_and_not_twice() {
     let at = script.display().to_string();
     // Both forms, because the banner and the failure used to be written by two
     // different places and only one of them knew about the other.
-    for argv in [
-        vec!["--nvapi", &at],
-        vec!["--nvapi", &at, "--appid", "1088850"],
-    ] {
+    for argv in [vec!["nvapi", &at], vec!["nvapi", &at, "--appid", "1088850"]] {
         let out = dxray(&argv);
         let text = stdout_of(&out);
         let banners = text.lines().filter(|line| line.trim() == at).count();
@@ -341,12 +338,12 @@ fn a_file_that_defeats_the_reader_is_named_once_and_not_twice() {
 
 #[test]
 fn a_directory_that_is_not_a_proton_says_so_rather_than_reporting_an_empty_policy() {
-    // Otherwise `--nvapi ~/Downloads` reports that the folder withholds NVAPI
+    // Otherwise `nvapi ~/Downloads` reports that the folder withholds NVAPI
     // from no games, which reads as a fact about Proton rather than about the
     // path that was typed.
     let dir = TempDir::new("nvapi-notproton");
 
-    let out = dxray([Path::new("--nvapi"), dir.path()]);
+    let out = dxray([Path::new("nvapi"), dir.path()]);
     let text = unwrapped(&out);
 
     assert!(!out.status.success());
@@ -361,7 +358,7 @@ fn nvapi_does_not_share_the_frozen_json_shape() {
     let dir = TempDir::new("nvapi-json");
     let root = proton(&dir, "Proton 9.0", DENY);
 
-    let out = dxray(["--nvapi", &root.display().to_string(), "--json"]);
+    let out = dxray(["nvapi", &root.display().to_string(), "--json"]);
 
     assert_eq!(out.status.code(), Some(2), "a usage error, not a run");
 }
@@ -410,7 +407,7 @@ fn the_steam_listing_names_the_build_a_game_ran_under_and_what_it_does_to_nvapi(
     )
     .expect("config_info");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = unwrapped(&out);
 
     assert!(
@@ -440,7 +437,7 @@ fn a_game_that_has_never_run_under_proton_gets_a_row_and_costs_no_exit_code() {
     )
     .expect("manifest");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = unwrapped(&out);
 
     assert!(

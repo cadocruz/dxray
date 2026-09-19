@@ -20,33 +20,111 @@ const INDENT: usize = 2 + LABEL;
 /// scan on a normal one because it was built for them does not.
 const WIDTH: usize = 80;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Presentation {
+    Standard,
+    Compact,
+    Full,
+}
+
+/// Explicit human modes share evidence with the standard formatter.
+pub fn present(record: &Record, mode: Presentation) -> String {
+    if mode == Presentation::Standard {
+        return render(record);
+    }
+    let mut out = String::new();
+    if mode == Presentation::Full {
+        let path = std::path::Path::new(&record.path);
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let _ = writeln!(out, "File: {}", absolute.display());
+        render_body(&mut out, record);
+    } else {
+        let _ = writeln!(out, "File: {}", record.path);
+        row(
+            &mut out,
+            "origin",
+            "direct path (launcher context unavailable)",
+        );
+        if let Some(error) = &record.error {
+            row(&mut out, "error", error);
+        } else {
+            row(
+                &mut out,
+                "renderer",
+                &format!("{} (static evidence)", record.verdict.headline()),
+            );
+            let names: Vec<_> = record
+                .verdict
+                .features
+                .iter()
+                .map(|f| f.name.clone())
+                .collect();
+            row(
+                &mut out,
+                "features",
+                &if names.is_empty() {
+                    "none found".to_owned()
+                } else {
+                    names.join(", ")
+                },
+            );
+            if !record.verdict.local_overrides.is_empty() {
+                findings(&mut out, "override", &record.verdict.local_overrides);
+            }
+        }
+    }
+    row(
+        &mut out,
+        "NVAPI",
+        "static Proton policy not assessed: no Proton/Steam app context supplied",
+    );
+    row(
+        &mut out,
+        "caveat",
+        "Static evidence does not establish runtime use or compatibility.",
+    );
+    if record.error.is_none() && record.verdict.renderers.is_empty() {
+        row(
+            &mut out,
+            "caveat",
+            "No graphics API determined statically; dynamically loaded renderers may not appear in import tables.",
+        );
+    }
+    out.push('\n');
+    out
+}
+
 /// Renders one record as an indented block, ending in a blank line.
 pub fn render(record: &Record) -> String {
     let mut out = String::with_capacity(512);
     let _ = writeln!(out, "{}", record.path);
+    render_body(&mut out, record);
+    out.push('\n');
+    out
+}
 
+fn render_body(out: &mut String, record: &Record) {
     if let Some(error) = &record.error {
-        row(&mut out, "error", error);
-        out.push('\n');
-        return out;
+        row(out, "error", error);
+        return;
     }
 
     let machine = record.machine.as_deref().unwrap_or("unknown");
     match record.bits {
-        Some(bits) => row(&mut out, "machine", &format!("{machine} ({bits}-bit)")),
-        None => row(&mut out, "machine", machine),
+        Some(bits) => row(out, "machine", &format!("{machine} ({bits}-bit)")),
+        None => row(out, "machine", machine),
     }
-    row(&mut out, "version", &versions(record));
+    row(out, "version", &versions(record));
 
     // The verdict first, then the findings that produced it, then the raw
     // tables. A reader who trusts the tool stops at the first line; one who
     // does not can walk down to the evidence without leaving the block.
     let verdict = &record.verdict;
-    row(&mut out, "verdict", &verdict.headline());
-    findings(&mut out, "renderer", &verdict.renderers);
-    findings(&mut out, "shared", &verdict.infrastructure);
-    findings(&mut out, "feature", &verdict.features);
-    findings(&mut out, "override", &verdict.local_overrides);
+    row(out, "verdict", &verdict.headline());
+    findings(out, "renderer", &verdict.renderers);
+    findings(out, "shared", &verdict.infrastructure);
+    findings(out, "feature", &verdict.features);
+    findings(out, "override", &verdict.local_overrides);
 
     // Delay-loaded entries are marked rather than listed apart: what matters to
     // a reader is that the dependency exists, and the fact that it resolves
@@ -65,24 +143,21 @@ pub fn render(record: &Record) -> String {
     }
 
     if graphics.is_empty() && other.is_empty() {
-        row(&mut out, "imports", "none");
+        row(out, "imports", "none");
     } else {
         if !graphics.is_empty() {
-            row(&mut out, "graphics", &wrap(&graphics));
+            row(out, "graphics", &wrap(&graphics));
         }
         if !other.is_empty() {
-            row(&mut out, "other", &wrap(&other));
+            row(out, "other", &wrap(&other));
         }
     }
-
-    out.push('\n');
-    out
 }
 
 /// A one-line trailer, emitted only when more than one thing was looked at —
 /// for a single one it would just restate the block above it.
 ///
-/// `noun` because `--game` counts install directories rather than files, and a
+/// `noun` because `game` counts install directories rather than files, and a
 /// trailer that calls them files is a small lie in the line that gets quoted.
 pub fn summary(total: usize, failed: usize, noun: &str) -> Option<String> {
     if total < 2 {

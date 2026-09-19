@@ -1,11 +1,11 @@
-//! The listing behind `--installed` and `--steam`: which launcher installations are
+//! The listing behind `installed` and `steam`: which launcher installations are
 //! on this machine, which libraries they hold, and which games are in them.
 //!
 //! One pass over [`dxray_core::walk`], asked about a different set of
-//! launchers by each flag. `--installed` passes
-//! [`launcher::all`](dxray_core::launcher::all) and `--steam` passes Steam
+//! launchers by each flag. `installed` passes
+//! [`launcher::all`](dxray_core::launcher::all) and `steam` passes Steam
 //! alone; nothing else differs, and neither flag knows the name of a launcher
-//! it was not handed. A launcher added to the registry appears under `--installed`
+//! it was not handed. A launcher added to the registry appears under `installed`
 //! without a line being edited here.
 //!
 //! That one pass produces **two renderings**: the indented listing a person
@@ -16,7 +16,7 @@
 //! have been a second answer to it, free to disagree the day a launcher
 //! behaved oddly. See [`Listing::json`] for the shape and what it promises.
 //!
-//! That is deliberately not a flag per launcher. `--heroic` beside `--steam`
+//! That is deliberately not a flag per launcher. `--heroic` beside `steam`
 //! multiplies with every launcher added, and worse, it would have the command
 //! line inventing its own notion of "which store" beside the one
 //! [`Origin`] already is. A launcher is a value, and the
@@ -38,7 +38,7 @@
 //! because a name on its own would read as a settled verdict about whatever
 //! `.exe` happened to sort first, and the score beside it is what lets a
 //! reader see a thin answer for what it is. The whole ranking, every candidate
-//! and every reason, is what `dxray --game <dir>` prints. See
+//! and every reason, is what `dxray game <dir>` prints. See
 //! [`render_games`].
 //!
 //! # What of this has met a real install
@@ -148,9 +148,9 @@ pub struct Listing {
     /// Whether each game says which launcher it came from.
     ///
     /// True exactly when the scan was asked about more than one launcher, which
-    /// is a fact about the question and not about the machine: `--installed` names
+    /// is a fact about the question and not about the machine: `installed` names
     /// origins on a machine with only Heroic on it, because the flag could have
-    /// found Steam and the reader has no way to know it did not. `--steam`
+    /// found Steam and the reader has no way to know it did not. `steam`
     /// never names them, because the flag already did — a column with the same
     /// value in every row is noise, and it would change the bytes of an output
     /// people already have captured.
@@ -789,7 +789,7 @@ fn row(out: &mut String, label: &str, value: &str) {
 ///
 /// The best candidate only, with its strongest reason — not the whole ranking.
 /// A library holds a hundred games and a full ranking for each would bury the
-/// listing; `dxray --game <path>` prints the rest, and the line here says the
+/// listing; `dxray game <path>` prints the rest, and the line here says the
 /// score so a reader can see which answers are thin ones.
 ///
 /// Every caveat the survey raised *is* printed, including the ones that say the
@@ -865,7 +865,7 @@ fn row(out: &mut String, label: &str, value: &str) {
 /// declared actually read — and an NVAPI answer is not part of that count. Most
 /// of a real library has never been launched under Proton and so has no prefix
 /// and no build to read, which is the ordinary state of a healthy machine
-/// rather than a scan that came up short. `dxray --nvapi <build>` is the mode
+/// rather than a scan that came up short. `dxray nvapi <build>` is the mode
 /// where failing to read a policy *is* the failure, and it exits 1 for it.
 fn render_games(
     sink: &mut Sink<'_>,
@@ -986,9 +986,9 @@ struct Place<'a> {
 /// One game as a JSON object: where it is, what its launcher calls it, and
 /// every row printed under it.
 ///
-/// `directory` is spelled the way `--game --json` spells it, because it is the
+/// `directory` is spelled the way `game --json` spells it, because it is the
 /// same thing and the two modes are meant to be used together: this answers
-/// "what is installed and where", and that path handed to `dxray --game <dir>
+/// "what is installed and where", and that path handed to `dxray game <dir>
 /// --json` answers "what is inside it", with the whole ranking, the scores and
 /// the reasons. This shape deliberately does not repeat that ranking — a
 /// hundred-game library would bury it — so `rows` carries what the terminal
@@ -1165,12 +1165,12 @@ pub fn nothing_found_json(launchers: &[&dyn Launcher]) -> String {
     out
 }
 
-/// Steam alone: the set of launchers `--steam` asks about.
+/// Steam alone: the set of launchers `steam` asks about.
 ///
 /// A constant slice so the caller can hand it to [`scan`] exactly where
-/// `--installed` hands it [`launcher::all`](dxray_core::launcher::all). The two
+/// `installed` hands it [`launcher::all`](dxray_core::launcher::all). The two
 /// flags differ in this value and nowhere else, which is the entire reason
-/// `--steam` did not have to keep its own listing.
+/// `steam` did not have to keep its own listing.
 pub const STEAM_ONLY: &[&dyn Launcher] = &[&dxray_core::steam::STEAM];
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! End to end tests for `--steam`: the real binary, a fake Steam tree, real
+//! End to end tests for `steam`: the real binary, a fake Steam tree, real
 //! exit codes.
 //!
 //! The tree is built here rather than found on the machine because there is no
@@ -56,7 +56,7 @@ fn a_steam_install_is_listed_with_its_library_and_the_games_in_it() {
     let home = TempDir::new("steam-home");
     let root = fake_steam(&home);
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -85,7 +85,7 @@ fn the_root_listed_inside_its_own_index_is_not_reported_as_two_libraries() {
     let home = TempDir::new("steam-dedup");
     fake_steam(&home);
 
-    let text = stdout_of(&dxray_with_home(home.path(), ["--steam"])).to_owned();
+    let text = stdout_of(&dxray_with_home(home.path(), ["steam"])).to_owned();
 
     assert_eq!(
         text.matches("Dota 2").count(),
@@ -112,7 +112,7 @@ fn a_machine_with_no_steam_says_where_it_looked_and_exits_1() {
     }
     let home = TempDir::new("steam-none");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stderr_of(&out);
 
     assert!(text.contains("no Steam installation found"), "got:\n{text}");
@@ -140,7 +140,7 @@ fn a_corrupt_library_index_fails_loudly_rather_than_reporting_an_empty_machine()
     )
     .expect("truncate the index");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
 
     assert_eq!(out.status.code(), Some(1), "an unreadable index is not a 0");
     assert!(
@@ -179,8 +179,8 @@ fn an_index_declaring_no_entries_is_not_byte_identical_to_a_healthy_one() {
     let healthy = TempDir::new("steam-healthy");
     fake_steam(&healthy);
 
-    let noted = dxray_with_home(bookkeeping_only.path(), ["--steam"]);
-    let clean = dxray_with_home(healthy.path(), ["--steam"]);
+    let noted = dxray_with_home(bookkeeping_only.path(), ["steam"]);
+    let clean = dxray_with_home(healthy.path(), ["steam"]);
     let noted_text = stdout_of(&noted);
     let clean_text = stdout_of(&clean);
 
@@ -244,7 +244,7 @@ fn a_corrupt_manifest_costs_its_own_game_and_no_others() {
     )
     .expect("a truncated manifest beside a good one");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -269,22 +269,17 @@ fn a_corrupt_manifest_costs_its_own_game_and_no_others() {
 
 #[test]
 fn steam_needs_no_paths_and_answers_the_same_question_in_json() {
-    // `--steam` takes the place of the path arguments, so requiring them would
-    // make the flag unusable. `--json` used to be refused with it, on the
-    // grounds that the record line is a frozen contract about PE files — which
-    // it is, and which is why the listing has a shape of its own instead of
-    // borrowing that one. The narrower flag renders it exactly as `--installed`
-    // does, because there is one listing and it is not told which flag asked.
+    // Inventory commands discover their roots and share a dedicated JSONL schema.
     let home = TempDir::new("steam-flags");
     let root = fake_steam(&home);
 
     assert_eq!(
-        dxray_with_home(home.path(), ["--steam"]).status.code(),
+        dxray_with_home(home.path(), ["steam"]).status.code(),
         Some(0),
         "no PATH argument is needed"
     );
 
-    let out = dxray_with_home(home.path(), ["--steam", "--json"]);
+    let out = dxray_with_home(home.path(), ["steam", "--json"]);
     let json = stdout_of(&out);
 
     assert_eq!(out.status.code(), Some(0), "got:\n{}", stderr_of(&out));
@@ -337,8 +332,8 @@ fn the_steam_json_refuses_nothing_the_steam_listing_prints() {
     )
     .expect("a truncated manifest beside a good one");
 
-    let human = dxray_with_home(home.path(), ["--steam"]);
-    let machine = dxray_with_home(home.path(), ["--steam", "--json"]);
+    let human = dxray_with_home(home.path(), ["steam"]);
+    let machine = dxray_with_home(home.path(), ["steam", "--json"]);
     let text = stdout_of(&human);
     let json = stdout_of(&machine);
 
@@ -365,11 +360,7 @@ fn the_steam_json_refuses_nothing_the_steam_listing_prints() {
 
 #[test]
 fn a_path_given_alongside_steam_is_a_usage_error_rather_than_a_silently_ignored_argument() {
-    // `--steam` returns before the paths are ever read, so `dxray <path>
-    // --steam` used to open nothing, say nothing about it, and exit 0 with a
-    // Steam install present. A run that inspected none of its arguments is
-    // indistinguishable from a clean one, which is the shape this tool exists
-    // to refuse. `--nvapi` returns in the same place and gets the same rule.
+    // Inventory commands reject explicit paths rather than silently ignoring them.
     let home = TempDir::new("steam-path");
     fake_steam(&home);
     let file = home.path().join("game.exe");
@@ -381,7 +372,7 @@ fn a_path_given_alongside_steam_is_a_usage_error_rather_than_a_silently_ignored_
 
     let out = dxray_with_home(
         home.path(),
-        [std::ffi::OsStr::new("--steam"), file.as_os_str()],
+        [std::ffi::OsStr::new("steam"), file.as_os_str()],
     );
     assert_eq!(
         out.status.code(),
@@ -417,7 +408,7 @@ fn each_game_gets_the_executable_this_tool_would_analyse_named_under_its_directo
     )
     .expect("fixture");
 
-    let text = stdout_of(&dxray_with_home(home.path(), ["--steam"])).to_owned();
+    let text = stdout_of(&dxray_with_home(home.path(), ["steam"])).to_owned();
 
     assert!(text.contains("best"), "the row exists at all, got:\n{text}");
     assert!(
@@ -452,7 +443,7 @@ fn a_redistributable_package_answers_for_itself_instead_of_being_filtered_by_nam
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -496,7 +487,7 @@ fn a_truncated_walk_is_incomplete_in_the_json_too_though_nothing_failed_to_read(
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["--steam", "--json"]);
+    let out = dxray_with_home(home.path(), ["steam", "--json"]);
     let json = stdout_of(&out);
 
     assert_eq!(out.status.code(), Some(1), "got:\n{json}");
@@ -529,7 +520,7 @@ fn a_game_that_is_not_downloaded_yet_names_the_missing_directory_and_costs_no_ex
     )
     .expect("manifest");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(text.contains("directory could not be read"), "got:\n{text}");
@@ -544,7 +535,7 @@ fn a_game_that_is_not_downloaded_yet_names_the_missing_directory_and_costs_no_ex
 fn a_game_whose_directory_was_only_partly_searched_fails_the_scan_and_says_so_in_the_trailer() {
     // The rule the exit code is drawn from: if the trailer tells a human the
     // answer is incomplete, the status has to tell a script the same thing.
-    // Before this, a `--steam` run could print that a walk truncated and still
+    // Before this, a `steam` run could print that a walk truncated and still
     // exit 0, so the two readers of one run came away with different stories.
     //
     // The install carries evidence of being a game — an executable named after
@@ -571,7 +562,7 @@ fn a_game_whose_directory_was_only_partly_searched_fails_the_scan_and_says_so_in
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -627,7 +618,7 @@ fn a_truncated_install_whose_only_reachable_binary_is_a_launcher_still_fails_the
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -662,7 +653,7 @@ fn a_game_that_merely_imports_no_renderer_leaves_the_scan_clean() {
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -712,7 +703,7 @@ fn an_install_that_argues_nothing_is_listed_under_the_ones_that_do() {
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["--steam"]);
+    let out = dxray_with_home(home.path(), ["steam"]);
     let text = stdout_of(&out);
 
     let game_at = text.find("dota 2 beta").expect("the game is listed");

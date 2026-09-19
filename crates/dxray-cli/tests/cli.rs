@@ -56,7 +56,11 @@ fn a_parsed_image_is_reported_as_one_json_line_with_the_promised_keys() {
             .build(),
     );
 
-    let out = dxray([std::ffi::OsStr::new("--json"), path.as_os_str()]);
+    let out = dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]);
     let text = stdout_of(&out);
 
     // Compared whole: the contract is the exact line, and asserting on parsed
@@ -99,7 +103,12 @@ fn a_binary_that_links_two_renderers_reports_both_and_names_its_proxy_dll() {
     // the name and the directory, which is exactly the point.
     dir.write("dxgi.dll", b"ReShade would go here");
 
-    let text = stdout_of(&dxray([std::ffi::OsStr::new("--json"), path.as_os_str()])).to_owned();
+    let text = stdout_of(&dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]))
+    .to_owned();
 
     assert!(
         text.contains(
@@ -130,7 +139,12 @@ fn a_32_bit_image_reports_32_bits_rather_than_defaulting() {
     let dir = TempDir::new("bits");
     let path = dir.write("old.exe", &Image::x86().importing(&["d3d9.dll"]).build());
 
-    let text = stdout_of(&dxray([std::ffi::OsStr::new("--json"), path.as_os_str()])).to_owned();
+    let text = stdout_of(&dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]))
+    .to_owned();
 
     assert!(
         text.contains("\"machine\":\"x86\",\"bits\":32"),
@@ -149,6 +163,7 @@ fn a_file_that_cannot_be_parsed_does_not_stop_the_ones_after_it() {
     let last = dir.write("c.dll", &Image::x64().importing(&["vulkan-1.dll"]).build());
 
     let out = dxray([
+        std::ffi::OsStr::new("inspect"),
         std::ffi::OsStr::new("--json"),
         first.as_os_str(),
         broken.as_os_str(),
@@ -181,7 +196,11 @@ fn a_failed_record_keeps_every_key_with_the_unknown_ones_emptied() {
     let dir = TempDir::new("failed");
     let path = dir.write("notes.txt", b"plain text");
 
-    let out = dxray([std::ffi::OsStr::new("--json"), path.as_os_str()]);
+    let out = dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]);
     let line = stdout_of(&out).trim_end();
 
     assert_shape(line);
@@ -204,6 +223,7 @@ fn a_path_that_is_not_there_is_reported_instead_of_aborting_the_run() {
     let gone = dir.path().join("not-here.dll");
 
     let out = dxray([
+        std::ffi::OsStr::new("inspect"),
         std::ffi::OsStr::new("--json"),
         gone.as_os_str(),
         good.as_os_str(),
@@ -231,7 +251,11 @@ fn a_directory_yields_its_images_and_leaves_the_rest_alone() {
     dir.write("readme.txt", b"hello");
     dir.write("sub/deep.dll", &image);
 
-    let out = dxray([std::ffi::OsStr::new("--json"), dir.path().as_os_str()]);
+    let out = dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        dir.path().as_os_str(),
+    ]);
     let lines: Vec<&str> = stdout_of(&out).lines().collect();
 
     assert_eq!(lines.len(), 2, "no recursion by default, got {lines:?}");
@@ -249,6 +273,7 @@ fn recursive_scanning_reaches_the_subdirectories_a_plain_scan_skips() {
     dir.write("sub/deep.dll", &image);
 
     let out = dxray([
+        std::ffi::OsStr::new("inspect"),
         std::ffi::OsStr::new("--json"),
         std::ffi::OsStr::new("--recursive"),
         dir.path().as_os_str(),
@@ -273,7 +298,11 @@ fn a_named_file_is_inspected_whatever_its_extension() {
         &Image::x64().importing(&["d3d12.dll"]).build(),
     );
 
-    let out = dxray([std::ffi::OsStr::new("--json"), path.as_os_str()]);
+    let out = dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]);
 
     assert!(
         stdout_of(&out).contains("\"d3d12.dll\""),
@@ -294,7 +323,7 @@ fn the_human_report_puts_the_graphics_libraries_where_they_can_be_seen() {
             .build(),
     );
 
-    let out = dxray([path.as_os_str()]);
+    let out = dxray([std::ffi::OsStr::new("inspect"), path.as_os_str()]);
     let text = stdout_of(&out);
 
     assert!(text.contains(&path.display().to_string()), "got:\n{text}");
@@ -316,7 +345,11 @@ fn the_human_report_counts_what_failed_when_several_files_were_looked_at() {
     let good = dir.write("a.dll", &Image::x64().importing(&["dxgi.dll"]).build());
     let bad = dir.write("b.dll", b"nope");
 
-    let out = dxray([good.as_os_str(), bad.as_os_str()]);
+    let out = dxray([
+        std::ffi::OsStr::new("inspect"),
+        good.as_os_str(),
+        bad.as_os_str(),
+    ]);
     let text = stdout_of(&out);
 
     assert!(text.contains("2 files, 1 failed"), "got:\n{text}");
@@ -333,6 +366,7 @@ fn json_output_carries_no_header_footer_or_blank_line() {
     let b = dir.write("b.dll", &image);
 
     let text = stdout_of(&dxray([
+        std::ffi::OsStr::new("inspect"),
         std::ffi::OsStr::new("--json"),
         a.as_os_str(),
         b.as_os_str(),
@@ -384,13 +418,18 @@ fn a_shipped_dlss_runtime_is_reported_with_the_build_it_is() {
             .build(),
     );
 
-    let human = stdout_of(&dxray([path.as_os_str()])).to_owned();
+    let human = stdout_of(&dxray([std::ffi::OsStr::new("inspect"), path.as_os_str()])).to_owned();
     assert!(
         human.contains("feature   DLSS Super Resolution  nvngx_dlss.dll (neighbour, 310.2.1.0)"),
         "the human report names the build, got:\n{human}"
     );
 
-    let json = stdout_of(&dxray([std::ffi::OsStr::new("--json"), path.as_os_str()])).to_owned();
+    let json = stdout_of(&dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]))
+    .to_owned();
     assert!(
         json.contains(
             r#""features":[{"name":"DLSS Super Resolution","via":[{"library":"nvngx_dlss.dll","source":"neighbour","version":{"state":"stamped","file":"310.2.1.0","product":"310.2.1.0"}}]}]"#
@@ -426,13 +465,18 @@ fn the_dlss_5_runtime_reaches_the_printed_report_like_any_other_library() {
             .build(),
     );
 
-    let human = stdout_of(&dxray([path.as_os_str()])).to_owned();
+    let human = stdout_of(&dxray([std::ffi::OsStr::new("inspect"), path.as_os_str()])).to_owned();
     assert!(
         human.contains("feature   DLSS Neural Rendering  nvngx_dlssnr.dll (neighbour, 310.8.0.0)"),
         "the human report names the feature, the file and its build, got:\n{human}"
     );
 
-    let json = stdout_of(&dxray([std::ffi::OsStr::new("--json"), path.as_os_str()])).to_owned();
+    let json = stdout_of(&dxray([
+        std::ffi::OsStr::new("inspect"),
+        std::ffi::OsStr::new("--json"),
+        path.as_os_str(),
+    ]))
+    .to_owned();
     assert!(
         json.contains(
             r#""features":[{"name":"DLSS Neural Rendering","via":[{"library":"nvngx_dlssnr.dll","source":"neighbour","version":{"state":"stamped","file":"310.8.0.0","product":"310.8.0.0"}}]}]"#
@@ -457,7 +501,7 @@ fn a_version_resource_of_all_zeroes_prints_as_a_number_rather_than_vanishing() {
         &Image::x64().versioned([0, 0, 0, 0], [0, 0, 0, 0]).build(),
     );
 
-    let human = stdout_of(&dxray([path.as_os_str()])).to_owned();
+    let human = stdout_of(&dxray([std::ffi::OsStr::new("inspect"), path.as_os_str()])).to_owned();
 
     assert!(
         human.contains("nvngx_dlssg.dll (neighbour, 0.0.0.0)"),
@@ -480,7 +524,7 @@ fn a_local_library_with_no_version_resource_says_so_rather_than_staying_silent()
     );
     dir.write("nvngx_dlss.dll", &Image::x64().build());
 
-    let human = stdout_of(&dxray([path.as_os_str()])).to_owned();
+    let human = stdout_of(&dxray([std::ffi::OsStr::new("inspect"), path.as_os_str()])).to_owned();
 
     assert!(
         human.contains("nvngx_dlss.dll (neighbour, no version)"),

@@ -1,4 +1,4 @@
-//! The `--nvapi` listing: what one Proton build's launcher script will do to a
+//! The `nvapi` listing: what one Proton build's launcher script will do to a
 //! game's NVAPI, and how much of that script was actually understood.
 //!
 //! The judgement is `dxray-core`'s; this module lays it out and caches it. It
@@ -22,18 +22,18 @@ use dxray_core::proton;
 
 use crate::wrap;
 
-/// Width of the label column, matching the `--steam` listing so the two read as
+/// Width of the label column, matching the `steam` listing so the two read as
 /// one tool.
 const LABEL: usize = 12;
 /// Where a wrapped value continues, under the first word of the one above it.
 const INDENT: usize = 2 + LABEL;
 
-/// What one `--nvapi` run produced.
+/// What one `nvapi` run produced.
 pub struct Outcome {
     pub text: String,
     /// True when a question that was asked did not get an answer.
     ///
-    /// A stricter rule than `--steam` uses, and deliberately: here the policy
+    /// A stricter rule than `steam` uses, and deliberately: here the policy
     /// *is* the question, so failing to read it is a failed run. In a listing
     /// that sweeps a whole machine, a game with no prefix is the ordinary state
     /// of most of a library and costs nothing. Both rules are written down
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn a_path_that_is_not_a_proton_is_a_row_rather_than_a_silence() {
-        // `--nvapi /some/folder` that finds nothing must not go on to report
+        // `nvapi /some/folder` that finds nothing must not go on to report
         // that the folder has no NVAPI policy, which reads as a fact about
         // Proton rather than about the path that was typed.
         let outcome = inspect(Path::new("/definitely/not/here"), &[]);

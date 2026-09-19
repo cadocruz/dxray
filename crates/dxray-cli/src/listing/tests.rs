@@ -372,7 +372,7 @@ fn a_game_says_which_launcher_supplied_it_when_more_than_one_could_have() {
 
 #[test]
 fn the_narrower_listing_does_not_repeat_the_one_launcher_it_was_asked_about() {
-    // `--steam` already said Steam. A column with the same value in every row
+    // `steam` already said Steam. A column with the same value in every row
     // costs a line per game and tells nobody anything, and printing it would
     // change output that people have captured.
     let mut out = String::new();
@@ -574,7 +574,7 @@ fn a_library_nobody_could_look_inside_is_not_reported_as_an_empty_one() {
 
 #[test]
 fn a_scan_of_no_launchers_at_all_counts_nothing_and_blames_nobody() {
-    // The state `--installed` turns into an exit code and a message naming where
+    // The state `installed` turns into an exit code and a message naming where
     // it looked. An empty listing that exited 0 would be the same output a
     // working scan of an empty machine produces, and the two are not the same
     // state: one means "you own no games", the other means "this tool did not
@@ -594,7 +594,7 @@ fn a_scan_of_no_launchers_at_all_counts_nothing_and_blames_nobody() {
 #[test]
 fn the_listing_asks_the_launchers_it_was_given_and_names_no_others() {
     // The flag is the launcher set and nothing else. This is what lets
-    // `--steam` and `--installed` share one implementation instead of being two
+    // `steam` and `installed` share one implementation instead of being two
     // renderers that drift.
     let one = Fake::new("first");
     let two = Fake::new("second");

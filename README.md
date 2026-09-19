@@ -54,31 +54,31 @@ The binaries are written to `target/release/`.
 Inspect one PE image:
 
 ```sh
-dxray path/to/game.exe
+dxray inspect path/to/game.exe
 ```
 
 Rank executables in a game directory and analyze the best candidate:
 
 ```sh
-dxray --game path/to/game-directory
+dxray game path/to/game-directory
 ```
 
 List local Steam and Heroic installations:
 
 ```sh
-dxray --installed
+dxray installed
 ```
 
 List Steam only:
 
 ```sh
-dxray --steam
+dxray steam
 ```
 
 Inspect the NVAPI policy in a Proton installation:
 
 ```sh
-dxray --nvapi path/to/Proton --appid 1088850
+dxray nvapi path/to/Proton --appid 1088850
 ```
 
 Start the terminal browser:
@@ -87,8 +87,31 @@ Start the terminal browser:
 dxray-tui
 ```
 
-Use `--json` with file, `--game`, `--installed` or `--steam` when another tool
-will consume the output. `--nvapi` intentionally has no JSON format yet.
+For `inspect` and `game`, use `--view compact` for static renderer evidence,
+features and essential caveats, or `--view full` for absolute paths, versions,
+imports and executable ranking. Compact output retains each input's path.
+`--view` cannot be combined with `--json`. Only `inspect` accepts
+`-r` / `--recursive`; only `nvapi` accepts repeatable `--appid ID` options.
+Without `--view`, reports use the standard text layout. Invalid
+options exit 2 before scanning. Direct paths do not provide launcher
+or Proton context, so these reports mark the static NVAPI policy as not assessed.
+
+Use `--json` with `inspect`, `game`, `installed` or `steam` when another tool
+will consume the output. `nvapi` intentionally has no JSON format yet.
+
+```bash
+dxray inspect --view compact path/to/game.exe path/to/another.exe
+dxray inspect --recursive --json path/to/library
+dxray game --view full path/to/game-directory
+dxray installed --json
+dxray nvapi path/to/Proton --appid 1088850 --appid 570
+```
+
+`inspect` and `game` require one or more `PATH` arguments. `nvapi` requires
+one `PROTON_PATH`, either an installation directory or its `proton` script.
+Options belong after the subcommand and may appear before or after paths.
+Use `--` before a path beginning with a hyphen. Run `dxray COMMAND --help`
+for command-specific options.
 
 ## Exit codes
 
