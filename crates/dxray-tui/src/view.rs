@@ -121,11 +121,6 @@ fn render_header(
         } else {
             "Detail"
         };
-        let filter = if app.filter.is_empty() {
-            "all"
-        } else {
-            &app.filter
-        };
         let lines = vec![
             Line::styled(format!("dxray {status} · {focus}"), theme.accent),
             Line::from(vec![
@@ -140,12 +135,17 @@ fn render_header(
                 Span::styled(format!(" Notes:{notes}"), theme.muted),
             ]),
             Line::from(format!(
-                "Entries:{} Libraries:{}",
+                "Entries:{} Libs:{} Roots:{}",
                 app.entries.len(),
-                app.libraries
+                app.libraries,
+                app.roots
             )),
-            Line::from(format!("Roots:{} · type to filter", app.roots)),
-            Line::from(format!("Filter: {filter}")),
+            Line::from(format!(
+                "Results: {}/{} · Esc clear",
+                app.filtered_len(),
+                app.entries.len()
+            )),
+            search_line(app, area.width, theme, false),
         ];
         render_if_visible(frame, Paragraph::new(lines), area);
         return;
@@ -188,21 +188,45 @@ fn render_header(
     if area.height >= 2 {
         render_if_visible(
             frame,
-            Paragraph::new(Line::from(vec![
-                Span::styled(" Filter: ", theme.accent.add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    if app.filter.is_empty() {
-                        "all entries"
-                    } else {
-                        &app.filter
-                    },
-                    theme.text,
-                ),
-                Span::styled("  · type a name or ID", theme.muted),
-            ])),
+            Paragraph::new(search_line(app, area.width, theme, true)),
             ratatui::layout::Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
         );
     }
+}
+
+fn query_tail(query: &str, width: usize) -> String {
+    if Line::from(query).width() <= width {
+        return query.to_owned();
+    }
+    let mut tail = query;
+    while Line::from(tail).width() + 1 > width {
+        let Some(character) = tail.chars().next() else {
+            break;
+        };
+        tail = &tail[character.len_utf8()..];
+    }
+    format!("…{tail}")
+}
+
+fn search_line(app: &App, width: u16, theme: &BubbleTheme, counts: bool) -> Line<'static> {
+    let prefix = if counts {
+        format!("Search {}/{}: [", app.filtered_len(), app.entries.len())
+    } else {
+        "Search: [".to_owned()
+    };
+    let suffix = if counts { "] · Esc clear" } else { "]" };
+    let query = if app.filter.is_empty() {
+        "type name or AppID"
+    } else {
+        &app.filter
+    };
+    let available =
+        usize::from(width).saturating_sub(Line::from(prefix.as_str()).width() + suffix.len());
+    Line::from(vec![
+        Span::styled(prefix, theme.accent),
+        Span::styled(query_tail(query, available), theme.text),
+        Span::styled(suffix, theme.muted),
+    ])
 }
 
 fn render_list(
@@ -235,7 +259,11 @@ fn render_list(
     if entries.is_empty() && !app.filter.is_empty() {
         render_if_visible(
             frame,
-            Paragraph::new(format!("No games match \"{}\".", app.filter)).style(theme.muted),
+            Paragraph::new(format!(
+                "No matches; Esc clears search.\n\"{}\"",
+                query_tail(&app.filter, usize::from(inner.width).saturating_sub(2))
+            ))
+            .style(theme.muted),
             inner,
         );
         return;
@@ -763,9 +791,9 @@ mod tests {
                     "Problems:1",
                     "Notes:0",
                     "Entries:1",
-                    "Libraries:0",
+                    "Libs:0",
                     "Roots:0",
-                    "Filter: all",
+                    "Search: [type name or AppID]",
                     "Tab/Shift-Tab pane",
                     "Esc clear/quit",
                 ] {
@@ -795,6 +823,33 @@ mod tests {
     }
 
     #[test]
+    fn search_field_reports_results_and_marks_overflow_at_all_supported_widths() {
+        use crate::Key;
+        for width in [32, 60, 99, 100, 180] {
+            let mut app = App::new(24);
+            app.update(Msg::Resize(width, 24));
+            app.update(Msg::Game(Box::new(game())));
+            assert!(draw(&app, width, 24).contains("type name or AppID"));
+            for character in "不存在".repeat(100).chars().chain("END".chars()) {
+                app.update(Msg::Key(Key::Char(character)));
+            }
+            let screen = draw(&app, width, 24);
+            assert!(screen.contains("0/1"));
+            assert!(screen.contains('…'));
+            assert!(screen.contains("END]"));
+            assert!(screen.contains("No matches; Esc clears search."));
+            app.update(Msg::Key(Key::Escape));
+            assert!(draw(&app, width, 24).contains("1/1"));
+            assert!(!app.quitting);
+            for character in "440".chars() {
+                app.update(Msg::Key(Key::Char(character)));
+            }
+            assert!(draw(&app, width, 24).contains("[440]"));
+            assert_eq!(app.filtered_len(), 1);
+        }
+    }
+
+    #[test]
     fn scan_status_and_totals_leave_the_filter_visible() {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(game())));
@@ -807,7 +862,7 @@ mod tests {
                 .lines()
                 .nth(1)
                 .unwrap()
-                .contains("Filter: all entries")
+                .contains("Search 1/1: [type name or AppID]")
         );
 
         app.update(Msg::Finished);
@@ -819,7 +874,7 @@ mod tests {
                 .lines()
                 .nth(1)
                 .unwrap()
-                .contains("Filter: all entries")
+                .contains("Search 1/1: [type name or AppID]")
         );
     }
 
@@ -835,8 +890,8 @@ mod tests {
         let header = screen.lines().next().unwrap();
         assert!(header.contains("Problems: 1  Notes: 2"));
         assert!(!header.contains("Warning"));
-        assert!(screen.contains("Filter: z"));
-        assert!(screen.contains("No games match"));
+        assert!(screen.contains("Search 0/1: [z]"));
+        assert!(screen.contains("No matches; Esc clears search."));
         assert!(screen.contains("Problem: unreadable library"));
         assert!(screen.contains("Note: duplicate library"));
         assert!(!screen.contains("3 scan notes"));
@@ -968,7 +1023,7 @@ mod tests {
                 let too_small = width < 32 || height < 12;
                 assert_eq!(screen.contains("Resize: 32x12 min"), too_small);
                 if !too_small {
-                    assert!(screen.contains("Filter: all"));
+                    assert!(screen.contains("Search: [type name or AppID]"));
                     assert_eq!(screen.contains("Games (1)"), focus == Focus::List);
                     assert_eq!(screen.contains("Details"), focus == Focus::Detail);
                 }

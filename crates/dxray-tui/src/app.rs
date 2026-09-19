@@ -667,6 +667,47 @@ mod tests {
     }
 
     #[test]
+    fn search_survives_arrivals_resize_and_scroll_without_hiding_empty_entries() {
+        let mut app = App::new(12);
+        app.update(Msg::Resize(32, 12));
+        for character in "MiXeD/".chars() {
+            app.update(Msg::Key(Key::Char(character)));
+        }
+        add(&mut app, 1, "unrelated");
+        assert_eq!(app.selected, None);
+        let mut empty = game(42, "mixed/empty");
+        empty.carries_evidence = Some(false);
+        app.update(Msg::Game(Box::new(empty)));
+        let selected = app.selected;
+        for id in 100..110 {
+            let mut entry = game(id, "MIXED/evidence");
+            entry.carries_evidence = Some(true);
+            app.update(Msg::Game(Box::new(entry)));
+        }
+        assert_eq!(app.filtered_len(), 11);
+        assert_eq!(app.selected, selected);
+        assert!(
+            app.visible_entries()
+                .iter()
+                .any(|entry| entry.name == "mixed/empty")
+        );
+        app.update(Msg::Resize(100, 24));
+        assert_eq!(app.selected, selected);
+        app.update(Msg::Key(Key::Home));
+        assert_eq!(app.selected_entry().unwrap().name, "MIXED/evidence");
+        app.update(Msg::Key(Key::Escape));
+        assert!(!app.quitting);
+        for character in "42".chars() {
+            app.update(Msg::Key(Key::Char(character)));
+        }
+        assert_eq!(app.filtered_len(), 1);
+        assert_eq!(app.selected, selected);
+        app.update(Msg::Key(Key::Backspace));
+        assert_eq!(app.filter, "4");
+        assert_eq!(app.selected, selected);
+    }
+
+    #[test]
     fn a_filter_with_no_results_has_no_selection_or_visible_rows() {
         let mut app = App::new(24);
         add(&mut app, 440, "Team Fortress 2");
