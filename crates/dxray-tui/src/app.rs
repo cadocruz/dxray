@@ -101,7 +101,7 @@ impl App {
     pub(crate) fn visible_entries(&self) -> Vec<&Entry> {
         self.filtered_indices()
             .skip(self.offset)
-            .take(layout::list_rows(self.height))
+            .take(layout::list_rows(self.width, self.height))
             .map(|index| &self.entries[index])
             .collect()
     }
@@ -172,7 +172,7 @@ impl App {
             self.offset = 0;
             return;
         };
-        let rows = layout::list_rows(self.height);
+        let rows = layout::list_rows(self.width, self.height);
         if selected < self.offset {
             self.offset = selected;
         } else if selected >= self.offset.saturating_add(rows) {
@@ -192,7 +192,7 @@ impl App {
     }
 
     fn detail_page(&mut self, delta: isize) {
-        let page = layout::detail_rows(self.height);
+        let page = layout::detail_rows(self.width, self.height);
         self.detail_offset = if delta.is_negative() {
             self.detail_offset.saturating_sub(page)
         } else {
@@ -208,7 +208,7 @@ impl App {
     fn clamp_detail_offset(&mut self) {
         let max = self
             .detail_line_count()
-            .saturating_sub(layout::detail_rows(self.height));
+            .saturating_sub(layout::detail_rows(self.width, self.height));
         self.detail_offset = self.detail_offset.min(max);
     }
 
@@ -256,10 +256,10 @@ impl App {
             Key::PageUp => self.select(
                 self.selected_position()
                     .unwrap_or(0)
-                    .saturating_sub(layout::list_rows(self.height)),
+                    .saturating_sub(layout::list_rows(self.width, self.height)),
             ),
             Key::PageDown => self.select(self.selected_position().map_or(0, |index| {
-                index.saturating_add(layout::list_rows(self.height))
+                index.saturating_add(layout::list_rows(self.width, self.height))
             })),
             Key::Home => self.select(0),
             Key::End => self.select(usize::MAX),
@@ -473,9 +473,10 @@ mod tests {
         // moves is the row, and a row that moves out of `[offset, offset+rows)`
         // is a selection the user cannot see — so this is the one test in the
         // file that asserts `offset`.
-        let rows = crate::layout::list_rows(7);
+        let rows = crate::layout::list_rows(120, 8);
         assert_eq!(rows, 2, "the window has to be smaller than the list");
-        let mut app = App::new(7);
+        let mut app = App::new(8);
+        app.update(Msg::Resize(120, 8));
         add_surveyed(&mut app, 10, "Runtime one", Vec::new());
         add_surveyed(&mut app, 20, "Runtime two", Vec::new());
         add_surveyed(&mut app, 30, "Runtime three", Vec::new());
@@ -661,7 +662,10 @@ mod tests {
         assert_eq!(app.detail_offset, 1);
 
         app.update(Msg::Key(Key::PageDown));
-        assert_eq!(app.detail_offset, 6);
+        assert_eq!(
+            app.detail_offset,
+            1 + crate::layout::detail_rows(app.width, app.height)
+        );
         app.update(Msg::Key(Key::Tab));
         assert_eq!(app.focus, Focus::List);
         app.update(Msg::Key(Key::Down));
@@ -688,20 +692,20 @@ mod tests {
         assert_eq!(
             narrow_offset,
             app.detail_line_count()
-                .saturating_sub(crate::layout::detail_rows(app.height))
+                .saturating_sub(crate::layout::detail_rows(app.width, app.height))
         );
         app.update(Msg::Resize(120, 30));
         assert!(app.detail_offset < narrow_offset);
         assert_eq!(
             app.detail_offset,
             app.detail_line_count()
-                .saturating_sub(crate::layout::detail_rows(app.height))
+                .saturating_sub(crate::layout::detail_rows(app.width, app.height))
         );
         app.update(Msg::Key(Key::PageDown));
         assert_eq!(
             app.detail_offset,
             app.detail_line_count()
-                .saturating_sub(crate::layout::detail_rows(app.height))
+                .saturating_sub(crate::layout::detail_rows(app.width, app.height))
         );
         app.update(Msg::Key(Key::Home));
         assert_eq!(app.detail_offset, 0);

@@ -2,6 +2,8 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+pub(crate) const SPLIT_WIDTH: u16 = 100;
+
 /// The parts of the screen used by the browser.
 ///
 /// Keeping these calculations here ensures that the reducer clamps scroll
@@ -16,12 +18,19 @@ pub(crate) struct Areas {
 
 #[must_use]
 pub(crate) fn areas(area: Rect) -> Areas {
+    let compact = area.width < SPLIT_WIDTH;
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(if compact { 5 } else { 2 }),
             Constraint::Min(3),
-            Constraint::Length(1),
+            Constraint::Length(if compact {
+                3
+            } else if area.width < 160 {
+                2
+            } else {
+                1
+            }),
         ])
         .split(area);
     let body = Layout::default()
@@ -31,8 +40,8 @@ pub(crate) fn areas(area: Rect) -> Areas {
 
     Areas {
         header: outer[0],
-        list: body[0],
-        detail: body[1],
+        list: if compact { outer[1] } else { body[0] },
+        detail: if compact { outer[1] } else { body[1] },
         help: outer[2],
     }
 }
@@ -51,24 +60,27 @@ pub(crate) fn detail_viewport(terminal_width: u16, terminal_height: u16) -> Rect
 
 /// Rows available to game names after the list's border is accounted for.
 ///
-/// The application header and help line take four terminal rows. Keeping this
-/// calculation outside the renderer makes page movement agree with what is
-/// actually visible.
+/// Uses the same header and help reservations as rendering.
 #[must_use]
-pub fn list_rows(terminal_height: u16) -> usize {
-    usize::from(terminal_height.saturating_sub(5)).max(1)
+pub fn list_rows(terminal_width: u16, terminal_height: u16) -> usize {
+    usize::from(
+        areas(Rect::new(0, 0, terminal_width, terminal_height))
+            .list
+            .height
+            .saturating_sub(2),
+    )
+    .max(1)
 }
 
 /// Rows available inside the bordered detail panel.
 ///
-/// Both panes live below the two-line header and above the one-line help, and
-/// both have a one-cell border on their top and bottom.
+/// Both panes have a one-cell border on their top and bottom.
 #[must_use]
-pub fn detail_rows(terminal_height: u16) -> usize {
-    usize::from(detail_viewport(1, terminal_height).height).max(1)
+pub fn detail_rows(terminal_width: u16, terminal_height: u16) -> usize {
+    usize::from(detail_viewport(terminal_width, terminal_height).height).max(1)
 }
 
-/// Approximate the inner width of the right-hand detail panel.
+/// Inner width of the detail panel, including the single-pane layout.
 #[must_use]
 pub fn detail_width(terminal_width: u16) -> u16 {
     detail_viewport(terminal_width, 5).width.max(1)

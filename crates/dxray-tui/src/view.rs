@@ -16,6 +16,13 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     if frame.area().width == 0 || frame.area().height == 0 {
         return;
     }
+    if frame.area().width < 32 || frame.area().height < 12 {
+        frame.render_widget(
+            Paragraph::new("Resize: 32x12 min").wrap(Wrap { trim: false }),
+            frame.area(),
+        );
+        return;
+    }
     let mut theme = BubbleTheme::new(
         Palette {
             foreground: Color::Reset,
@@ -34,8 +41,21 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     let areas = crate::layout::areas(frame.area());
 
     render_header(app, &theme, frame, areas.header);
-    render_list(app, &theme, frame, areas.list);
-    render_detail(app, &theme, frame, areas.detail);
+    if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::List {
+        render_list(app, &theme, frame, areas.list);
+    }
+    if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::Detail {
+        render_detail(app, &theme, frame, areas.detail);
+    }
+    if frame.area().width < 160 {
+        let help = if frame.area().width < crate::layout::SPLIT_WIDTH {
+            "Tab/Shift-Tab pane · ↑↓ move\nPgUp/PgDn page · Home/End ends\nEsc clear/quit · Ctrl-C quit"
+        } else {
+            "Tab/Shift-Tab pane · ↑↓ move/scroll · PgUp/PgDn page · Home/End first/last\nType to filter · Backspace edit · Esc clear/quit · Ctrl-C quit"
+        };
+        render_if_visible(frame, Paragraph::new(help).style(theme.muted), areas.help);
+        return;
+    }
     render_if_visible(
         frame,
         Paragraph::new(theme.help_line([
@@ -74,6 +94,42 @@ fn render_header(
         .filter(|message| matches!(message, ScanMessage::Problem(_)))
         .count();
     let notes = app.problems.len() - problems;
+    if area.width < crate::layout::SPLIT_WIDTH {
+        let status = if app.finished { "done" } else { "scanning" };
+        let focus = if app.focus == Focus::List {
+            "List"
+        } else {
+            "Detail"
+        };
+        let filter = if app.filter.is_empty() {
+            "all"
+        } else {
+            &app.filter
+        };
+        let lines = vec![
+            Line::styled(format!("dxray {status} · {focus}"), theme.accent),
+            Line::from(vec![
+                Span::styled(
+                    format!("Problems:{problems}"),
+                    if problems == 0 {
+                        theme.muted
+                    } else {
+                        theme.error
+                    },
+                ),
+                Span::styled(format!(" Notes:{notes}"), theme.muted),
+            ]),
+            Line::from(format!(
+                "Entries:{} Libraries:{}",
+                app.entries.len(),
+                app.libraries
+            )),
+            Line::from(format!("Roots:{} · type to filter", app.roots)),
+            Line::from(format!("Filter: {filter}")),
+        ];
+        render_if_visible(frame, Paragraph::new(lines), area);
+        return;
+    }
     render_if_visible(
         frame,
         Paragraph::new(Line::from(vec![
@@ -252,7 +308,7 @@ fn render_detail(
         title.push_str(" · active");
     }
     let content_lines = detail_line_count(app);
-    if content_lines > crate::layout::detail_rows(app.height) {
+    if content_lines > crate::layout::detail_rows(app.width, app.height) {
         write!(
             title,
             " · {}/{}",
@@ -546,6 +602,58 @@ mod tests {
         assert!(screen.contains("Team Fortress 2"));
         assert!(screen.contains("Problem: could not read /steam/libraryfolders.vdf"));
         assert!(screen.contains("Note: library is declared twice"));
+    }
+
+    #[test]
+    fn responsive_panels_preserve_focus_selection_and_page_geometry() {
+        use crate::{app::Focus, key::Key};
+        let mut app = App::new(24);
+        let mut entry = game();
+        entry.notes = (0..80).map(|i| format!("evidence line {i}")).collect();
+        app.update(Msg::Game(Box::new(entry)));
+        app.update(Msg::Problem("unreadable library".into()));
+        let selected = app.selected;
+        for width in [32, 60, 99, 100, 120, 180, 40] {
+            app.update(Msg::Resize(width, 24));
+            app.focus = Focus::List;
+            let list = draw(&app, width, 24);
+            assert!(list.contains("Games (1)"));
+            assert_eq!(list.contains("Details"), width >= 100);
+            if width < 100 {
+                for text in [
+                    "scanning",
+                    "Problems:1",
+                    "Notes:0",
+                    "Entries:1",
+                    "Libraries:0",
+                    "Roots:0",
+                    "Filter: all",
+                    "Tab/Shift-Tab pane",
+                    "Esc clear/quit",
+                ] {
+                    assert!(list.contains(text), "missing {text} at {width}");
+                }
+            }
+            app.update(Msg::Key(Key::Tab));
+            assert_eq!(app.focus, Focus::Detail);
+            app.update(Msg::Key(Key::Home));
+            app.update(Msg::Key(Key::PageDown));
+            let viewport = crate::layout::detail_viewport(width, 24);
+            assert_eq!(app.detail_offset, usize::from(viewport.height));
+            let detail = draw(&app, width, 24);
+            assert!(detail.contains("Details"));
+            assert_eq!(detail.contains("Games (1)"), width >= 100);
+            app.update(Msg::Key(Key::End));
+            app.update(Msg::Resize(80, 30));
+            assert_eq!(app.focus, Focus::Detail);
+            assert!(
+                app.detail_offset
+                    <= super::detail_line_count(&app)
+                        .saturating_sub(crate::layout::detail_rows(80, 30))
+            );
+            app.update(Msg::Key(Key::BackTab));
+            assert_eq!(app.selected, selected);
+        }
     }
 
     #[test]
