@@ -139,11 +139,18 @@ fn dxray_still_depends_on_almost_nothing() {
     let lock = lockfile();
     let reached = reachable(&graph(&lock), "dxray-cli");
 
-    // clap and its tree, plus this project's own crates. Nothing else.
+    // clap, workspace crates, and serde_json used only by contract tests.
     let allowed: HashSet<&str> = [
         "dxray-cli",
         "dxray-core",
         "dxray-pe",
+        "serde_json",
+        "serde",
+        "serde_core",
+        "serde_derive",
+        "itoa",
+        "memchr",
+        "zmij",
         "clap",
         "clap_builder",
         "clap_derive",
