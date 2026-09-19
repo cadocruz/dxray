@@ -280,30 +280,8 @@ fn render_detail(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
 ) {
-    let mut lines = app.selected_entry().map_or_else(
-        || {
-            if app.filter.is_empty() {
-                vec![Line::from("Waiting for a game to be discovered.")]
-            } else {
-                vec![Line::from("No selected game matches the current filter.")]
-            }
-        },
-        detail_lines,
-    );
-    if !app.problems.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from("Scan messages:"));
-        lines.extend(
-            app.problems
-                .iter()
-                .map(|message| Line::from(format!("{}: {}", message.label(), message.text()))),
-        );
-    }
-    let mut title = if app.problems.is_empty() {
-        "Details".to_owned()
-    } else {
-        format!("Details · {} scan messages", app.problems.len())
-    };
+    let lines = panel_lines(app);
+    let mut title = "Details".to_owned();
     if app.focus == Focus::Detail {
         title.push_str(" · active");
     }
@@ -336,22 +314,38 @@ fn render_detail(
     );
 }
 
+// Rendering and scroll measurement share the same content.
+fn panel_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("Selected entry:").style(Modifier::BOLD)];
+    lines.extend(app.selected_entry().map_or_else(
+        || {
+            if app.filter.is_empty() {
+                vec![Line::from("Waiting for a game to be discovered.")]
+            } else {
+                vec![Line::from("No selected game matches the current filter.")]
+            }
+        },
+        detail_lines,
+    ));
+    if !app.problems.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from("Scan diagnostics:").style(Modifier::BOLD));
+        lines.push(Line::from("Scope: entire scan"));
+        lines.extend(app.problems.iter().map(|message| {
+            let line = Line::from(format!("{}: {}", message.label(), message.text()));
+            match message {
+                ScanMessage::Problem(_) => line.style(Color::Red),
+                ScanMessage::Note(_) => line,
+            }
+        }));
+    }
+    lines
+}
+
 /// Visual rows in the current detail pane. The reducer uses this to keep a
 /// scroll offset valid after selection, scan messages, and terminal resizes.
 pub(crate) fn detail_line_count(app: &App) -> usize {
-    let mut lines = app.selected_entry().map_or_else(
-        || vec![Line::from("Waiting for a game to be discovered.")],
-        detail_lines,
-    );
-    if !app.problems.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from("Scan messages:"));
-        lines.extend(
-            app.problems
-                .iter()
-                .map(|message| Line::from(format!("{}: {}", message.label(), message.text()))),
-        );
-    }
+    let lines = panel_lines(app);
     let width = usize::from(crate::layout::detail_width(app.width));
     lines
         .iter()
@@ -468,6 +462,10 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
                 .iter()
                 .map(|line| Line::from(format!("  {line}"))),
         );
+    }
+    if !entry.notes.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from("Entry notes:").style(Modifier::BOLD));
     }
     lines.extend(
         entry
@@ -624,7 +622,8 @@ mod tests {
         ));
         app.update(Msg::Note("library is declared twice".to_owned()));
 
-        let screen = draw(&app, 100, 24);
+        app.update(Msg::Resize(180, 50));
+        let screen = draw(&app, 180, 50);
         assert!(screen.contains("Team Fortress 2"));
         assert!(screen.contains("Problem: could not read /steam/libraryfolders.vdf"));
         assert!(screen.contains("Note: library is declared twice"));
@@ -757,7 +756,7 @@ mod tests {
             assert!(screen.contains(if focus == crate::app::Focus::List {
                 "Games (0) · active"
             } else {
-                "Details · 1 scan messages · active"
+                "Details · active"
             }));
             let footer = screen.lines().last().unwrap();
             for key in [
@@ -771,6 +770,65 @@ mod tests {
             ] {
                 assert!(footer.contains(key));
             }
+        }
+    }
+
+    #[test]
+    fn entry_notes_and_scan_diagnostics_have_distinct_sections() {
+        let mut app = App::new(60);
+        let mut entry = game();
+        entry.notes.push("selection remains uncertain".into());
+        app.update(Msg::Game(Box::new(entry)));
+        app.update(Msg::Problem("unreadable library".into()));
+        app.update(Msg::Note("duplicate library".into()));
+        for width in [60, 180] {
+            app.update(Msg::Resize(width, 60));
+            app.focus = crate::app::Focus::Detail;
+            let screen = draw(&app, width, 60);
+            let selected = screen.find("Selected entry:").unwrap();
+            let notes = screen.find("Entry notes:").unwrap();
+            let local = screen.find("Note: selection remains uncertain").unwrap();
+            let scan = screen.find("Scan diagnostics:").unwrap();
+            let problem = screen.find("Problem: unreadable library").unwrap();
+            let note = screen.find("Note: duplicate library").unwrap();
+            assert!(selected < notes && notes < local && local < scan);
+            assert!(scan < problem && problem < note);
+            assert!(screen.contains("Scope: entire scan"));
+            assert!(!screen.contains("Warning:"));
+        }
+    }
+
+    #[test]
+    fn absent_notes_and_diagnostics_do_not_render_empty_sections() {
+        let mut app = App::new(50);
+        app.update(Msg::Game(Box::new(game())));
+        let screen = draw(&app, 180, 50);
+        assert!(screen.contains("Selected entry:"));
+        assert!(!screen.contains("Entry notes:"));
+        assert!(!screen.contains("Scan diagnostics:"));
+        assert!(screen.contains("Problems: 0  Notes: 0"));
+    }
+
+    #[test]
+    fn diagnostics_remain_reachable_after_scrolling_and_resizing() {
+        let mut app = App::new(24);
+        let mut entry = game();
+        entry.notes = (0..60).map(|i| format!("entry caveat {i}")).collect();
+        app.update(Msg::Game(Box::new(entry)));
+        app.update(Msg::Problem("scan failure".into()));
+        app.update(Msg::Note("scan note".into()));
+        app.focus = crate::app::Focus::Detail;
+        let selected = app.selected;
+        for width in [180, 60, 32, 100] {
+            app.update(Msg::Resize(width, 30));
+            app.update(Msg::Key(crate::key::Key::End));
+            let screen = draw(&app, width, 30);
+            assert!(screen.contains("Scan diagnostics:"), "{screen}");
+            assert!(screen.contains("Problem: scan failure"), "{screen}");
+            assert!(screen.contains("Note: scan note"), "{screen}");
+            assert_eq!(app.selected, selected);
+            app.update(Msg::Key(crate::key::Key::Home));
+            assert!(draw(&app, width, 30).contains("Selected entry:"));
         }
     }
 
