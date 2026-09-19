@@ -25,6 +25,7 @@ pub struct App {
     pub(crate) offset: usize,
     /// First logical line shown in the detail panel.
     pub(crate) detail_offset: usize,
+    pub(crate) evidence_expanded: bool,
     pub(crate) focus: Focus,
     pub(crate) width: u16,
     pub(crate) height: u16,
@@ -70,6 +71,7 @@ impl App {
             selected: None,
             offset: 0,
             detail_offset: 0,
+            evidence_expanded: false,
             focus: Focus::List,
             width: 80,
             height,
@@ -161,6 +163,9 @@ impl App {
             .filtered_indices()
             .nth(position.min(last))
             .expect("a filtered position below its measured length must exist");
+        if self.selected != Some(index) {
+            self.evidence_expanded = false;
+        }
         self.selected = Some(index);
         self.keep_selection_visible();
         self.detail_offset = 0;
@@ -183,6 +188,8 @@ impl App {
     }
 
     fn filter_changed(&mut self) {
+        self.evidence_expanded = false;
+        self.detail_offset = 0;
         if self.selected_position().is_none() {
             self.select(0);
         } else {
@@ -263,6 +270,10 @@ impl App {
             })),
             Key::Home => self.select(0),
             Key::End => self.select(usize::MAX),
+            Key::Enter if self.focus == Focus::Detail && self.selected_entry().is_some() => {
+                self.evidence_expanded = !self.evidence_expanded;
+                self.clamp_detail_offset();
+            }
             Key::Enter => {}
         }
     }
@@ -351,6 +362,32 @@ mod tests {
 
     fn add(app: &mut App, appid: u32, name: &str) {
         app.update(Msg::Game(Box::new(game(appid, name))));
+    }
+
+    #[test]
+    fn expansion_belongs_to_current_selection_and_filter() {
+        let mut app = App::new(30);
+        app.update(Msg::Key(Key::Tab));
+        app.update(Msg::Key(Key::Enter));
+        assert!(!app.evidence_expanded);
+        add(&mut app, 1, "Alpha");
+        add(&mut app, 2, "Beta");
+        app.update(Msg::Key(Key::Enter));
+        assert!(app.evidence_expanded);
+        app.update(Msg::Resize(60, 12));
+        add(&mut app, 3, "Gamma");
+        assert!(app.evidence_expanded);
+        app.update(Msg::Key(Key::Tab));
+        app.update(Msg::Key(Key::Enter));
+        assert!(app.evidence_expanded);
+        app.update(Msg::Key(Key::Down));
+        assert!(!app.evidence_expanded);
+        app.update(Msg::Key(Key::Tab));
+        app.update(Msg::Key(Key::Enter));
+        app.update(Msg::Key(Key::Char('B')));
+        assert!(!app.evidence_expanded);
+        assert_eq!(app.detail_offset, 0);
+        assert_eq!(app.selected, Some(1));
     }
 
     /// An entry built the way the scanning thread builds it, from a survey, so

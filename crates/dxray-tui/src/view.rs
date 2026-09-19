@@ -47,6 +47,26 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::Detail {
         render_detail(app, &theme, frame, areas.detail);
     }
+    let evidence_help = if app.evidence_expanded {
+        "Enter collapse evidence"
+    } else {
+        "Enter expand evidence"
+    };
+    if app.focus == Focus::Detail && app.selected_entry().is_some() {
+        let help = if frame.area().width < crate::layout::SPLIT_WIDTH {
+            format!("{evidence_help}\nTab/Shift-Tab pane · ↑↓ scroll\nPgUp/PgDn · Esc · Ctrl-C")
+        } else if frame.area().width < 160 {
+            format!(
+                "{evidence_help} · Tab/Shift-Tab pane · ↑↓ scroll · PgUp/PgDn page\nHome/End ends · Type to filter · Backspace edit · Esc clear/quit · Ctrl-C quit"
+            )
+        } else {
+            format!(
+                "{evidence_help} · Tab/Shift-Tab pane · ↑↓ scroll · PgUp/PgDn page · Home/End ends · Backspace edit · Esc clear/quit · Ctrl-C quit"
+            )
+        };
+        render_if_visible(frame, Paragraph::new(help).style(theme.muted), areas.help);
+        return;
+    }
     if frame.area().width < 160 {
         let help = if frame.area().width < crate::layout::SPLIT_WIDTH {
             "Tab/Shift-Tab pane · ↑↓ move\nPgUp/PgDn page · Home/End ends\nEsc clear/quit · Ctrl-C quit"
@@ -325,7 +345,7 @@ fn panel_lines(app: &App) -> Vec<Line<'static>> {
                 vec![Line::from("No selected game matches the current filter.")]
             }
         },
-        detail_lines,
+        |entry| detail_lines(entry, app.evidence_expanded),
     ));
     if !app.problems.is_empty() {
         lines.push(Line::from(""));
@@ -390,7 +410,7 @@ fn wrapped_line_count(line: &Line<'_>, width: usize) -> usize {
     rows
 }
 
-fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
+fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("{} ({})", entry.name, entry.id_label())),
         Line::from(format!("Source: {}", entry.origin.label())),
@@ -403,12 +423,17 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
     }
     match &entry.best {
         Best::Ranked(ranked) => {
+            if !ranked.has_evidence() {
+                lines.push(Line::from(
+                    "• nothing observed argues that this is the game",
+                ));
+            }
             if let Ok(verdict) = &ranked.verdict
                 && verdict.renderers.is_empty()
             {
                 lines.push(Line::from("Renderer unknown from static evidence."));
             }
-            render_verdict(&mut lines, ranked);
+            render_verdict(&mut lines, ranked, false);
         }
         Best::NoExecutable => lines.push(Line::from("No executable was found in this install.")),
         Best::Unwalkable(error) => {
@@ -419,6 +444,26 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
     lines.push(Line::from("Proton / NVAPI — static policy:"));
     lines.push(Line::from(format!("NVAPI: {}", entry.nvapi.verdict)));
     lines.push(Line::from("Policy does not establish runtime enablement."));
+    if !entry.notes.is_empty() {
+        lines.push(Line::from("Entry notes:").style(Modifier::BOLD));
+        lines.extend(
+            entry
+                .notes
+                .iter()
+                .map(|note| Line::from(format!("Note: {note}"))),
+        );
+    }
+    lines.push(
+        Line::from(if expanded {
+            "Evidence details [expanded]"
+        } else {
+            "Evidence details [collapsed]"
+        })
+        .style(Modifier::BOLD),
+    );
+    if !expanded {
+        return lines;
+    }
     lines.push(Line::from(""));
     lines.push(Line::from("Paths and selection evidence:"));
     lines.push(Line::from(format!(
@@ -430,6 +475,7 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
         lines.push(Line::from(format!("Proton script: {}", script.display())));
     }
     if let Best::Ranked(ranked) = &entry.best {
+        render_verdict(&mut lines, ranked, true);
         lines.push(Line::from(format!(
             "Executable: {} (score {}, {} candidates)",
             ranked.path.display(),
@@ -463,23 +509,13 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
                 .map(|line| Line::from(format!("  {line}"))),
         );
     }
-    if !entry.notes.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from("Entry notes:").style(Modifier::BOLD));
-    }
-    lines.extend(
-        entry
-            .notes
-            .iter()
-            .map(|note| Line::from(format!("Note: {note}"))),
-    );
     lines
 }
 
 /// Adds the evidence read from the selected executable without interpreting it
 /// again. `dxray-core` owns the classification; the TUI only exposes every
 /// finding and the observation that supports it.
-fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
+fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked, expanded: bool) {
     match &ranked.verdict {
         Ok(verdict) if verdict.is_empty() => {
             lines.push(Line::from(
@@ -491,14 +527,14 @@ fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
             lines.push(Line::from(
                 "Imports do not prove the renderer used at runtime.",
             ));
-            render_findings(lines, "Renderers", &verdict.renderers);
-            render_findings(lines, "Infrastructure", &verdict.infrastructure);
+            render_findings(lines, "Renderers", &verdict.renderers, expanded);
+            render_findings(lines, "Infrastructure", &verdict.infrastructure, expanded);
             lines.push(Line::from(""));
-            render_findings(lines, "Features", &verdict.features);
+            render_findings(lines, "Features", &verdict.features, expanded);
             lines.push(Line::from(
                 "DLL presence does not prove a feature is enabled.",
             ));
-            render_findings(lines, "Local overrides", &verdict.local_overrides);
+            render_findings(lines, "Local overrides", &verdict.local_overrides, expanded);
         }
         Err(error) => {
             lines.push(Line::from(format!(
@@ -511,7 +547,12 @@ fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
 /// Renders a complete verdict category, including empty categories. Keeping
 /// them visible means a missing category is not confused with one that was
 /// accidentally omitted by the detail view.
-fn render_findings(lines: &mut Vec<Line<'static>>, category: &str, findings: &[Finding]) {
+fn render_findings(
+    lines: &mut Vec<Line<'static>>,
+    category: &str,
+    findings: &[Finding],
+    expanded: bool,
+) {
     lines.push(Line::from(format!("{category}:")));
     if findings.is_empty() {
         lines.push(Line::from("  none"));
@@ -520,6 +561,9 @@ fn render_findings(lines: &mut Vec<Line<'static>>, category: &str, findings: &[F
 
     for finding in findings {
         lines.push(Line::from(format!("  {}", finding.name)));
+        if !expanded {
+            continue;
+        }
         // The same sentence `dxray --game` prints, from the same function.
         lines.extend(
             finding
@@ -535,6 +579,75 @@ mod tests {
     use std::{io, path::PathBuf};
 
     use dxray_core::{Evidence, analyse};
+
+    #[test]
+    fn evidence_toggle_preserves_triage_and_scroll_across_sizes() {
+        use crate::{Key, app::Focus};
+        for width in [32, 60, 99, 100, 180] {
+            let mut app = App::new(30);
+            let mut entry = ranked_entry(Ok(analyse(&Evidence {
+                imports: vec!["d3d12.dll".into()],
+                ..Evidence::default()
+            })));
+            entry.notes.push("entry caveat".into());
+            app.update(Msg::Resize(width, 30));
+            app.update(Msg::Game(Box::new(entry)));
+            app.update(Msg::Problem("global diagnostic".into()));
+            app.update(Msg::Key(Key::Enter));
+            assert!(!app.evidence_expanded);
+            app.update(Msg::Key(Key::Tab));
+            assert_eq!(app.focus, Focus::Detail);
+            let collapsed = super::panel_lines(&app)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(collapsed.contains("Entry notes:"));
+            assert!(collapsed.contains("Scope: entire scan"));
+            assert!(!collapsed.contains("/games/tf2"));
+            assert!(!collapsed.contains("d3d12.dll (import)"));
+            assert!(draw(&app, width, 30).contains("Enter expand evidence"));
+            app.update(Msg::Key(Key::Enter));
+            let expanded = super::panel_lines(&app)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(expanded.contains("/games/tf2"));
+            assert!(expanded.contains("d3d12.dll (import)"));
+            assert!(draw(&app, width, 30).contains("Enter collapse evidence"));
+            app.update(Msg::Key(Key::PageDown));
+            app.update(Msg::Resize(width, 12));
+            app.update(Msg::Key(Key::End));
+            assert!(draw(&app, width, 12).contains("global diagnostic"));
+            app.update(Msg::Key(Key::Enter));
+            assert!(!app.evidence_expanded);
+            assert!(
+                app.detail_offset
+                    <= super::detail_line_count(&app)
+                        .saturating_sub(crate::layout::detail_rows(width, 12))
+            );
+            app.update(Msg::Resize(width, 30));
+            app.update(Msg::Key(Key::Home));
+            assert!(draw(&app, width, 30).contains("Selected entry:"));
+        }
+    }
+
+    #[test]
+    fn entry_without_pe_evidence_can_expand_paths() {
+        use crate::Key;
+        let mut app = App::new(50);
+        app.update(Msg::Resize(180, 50));
+        app.update(Msg::Game(Box::new(game())));
+        app.update(Msg::Key(Key::Tab));
+        assert!(draw(&app, 180, 50).contains("No executable was found"));
+        app.update(Msg::Key(Key::Enter));
+        let screen = draw(&app, 180, 50);
+        assert!(screen.contains("Install: /games/tf2"));
+        assert!(!screen.contains("score"));
+        app.update(Msg::Key(Key::Enter));
+        assert!(!draw(&app, 180, 50).contains("Install:"));
+    }
     use ratatui::{Terminal, backend::TestBackend, text::Line};
     use ratatui_tea::Model;
 
@@ -884,6 +997,7 @@ mod tests {
         let mut app = App::new(80);
         app.update(Msg::Resize(200, 80));
         app.update(Msg::Game(Box::new(entry)));
+        app.evidence_expanded = true;
         let screen = draw(&app, 200, 80);
         let mut previous = 0;
         for section in [
@@ -893,10 +1007,10 @@ mod tests {
             "Renderers:",
             "Features:",
             "Proton / NVAPI — static policy:",
+            "Note: selection remains uncertain",
             "Paths and selection evidence:",
             "Executable:",
             "NVAPI condition:",
-            "Note: selection remains uncertain",
         ] {
             let position = screen
                 .find(section)
@@ -934,7 +1048,8 @@ mod tests {
         };
         app.update(Msg::Game(Box::new(entry)));
 
-        let screen = draw(&app, 120, 30);
+        app.evidence_expanded = true;
+        let screen = draw(&app, 120, 40);
         assert!(screen.contains("NVAPI: not determined: NVAPI depends on a condition"));
         assert!(screen.contains("Proton script: /compatibilitytools.d/Proton/proton"));
         assert!(screen.contains("NVAPI condition:"));
@@ -953,7 +1068,8 @@ mod tests {
         let mut app = App::new(40);
         app.update(Msg::Game(Box::new(ranked_entry(Ok(verdict)))));
 
-        let screen = draw(&app, 160, 50);
+        app.evidence_expanded = true;
+        let screen = draw(&app, 160, 80);
         assert!(screen.contains("Renderers:"));
         assert!(screen.contains("Direct3D 12"));
         assert!(screen.contains("D3D12.dll (import)"));
@@ -1008,7 +1124,8 @@ mod tests {
         let mut app = App::new(40);
         app.update(Msg::Game(Box::new(ranked_entry(Ok(verdict)))));
 
-        let screen = draw(&app, 160, 50);
+        app.evidence_expanded = true;
+        let screen = draw(&app, 160, 80);
         assert!(
             screen.contains("nvngx_dlss.dll (neighbour, 310.2.1.0)"),
             "the detail pane has to name the build, got:\n{screen}"
