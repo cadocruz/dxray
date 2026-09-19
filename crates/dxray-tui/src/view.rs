@@ -2,12 +2,13 @@
 
 use std::fmt::Write as _;
 
+use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
-use ratatui_bubbletea_components::{ListItem, SelectList, Spinner, SpinnerFrames};
-use ratatui_bubbletea_theme::BubbleTheme;
+use ratatui_bubbletea_components::{ListItem, SelectList};
+use ratatui_bubbletea_theme::{BubbleTheme, Palette, Symbols};
 
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, ScanMessage};
 use crate::entry::{Best, Entry, Ranked};
 use dxray_core::analysis::Finding;
 
@@ -15,7 +16,21 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     if frame.area().width == 0 || frame.area().height == 0 {
         return;
     }
-    let theme = BubbleTheme::default();
+    let mut theme = BubbleTheme::new(
+        Palette {
+            foreground: Color::Reset,
+            muted: Color::Gray,
+            accent: Color::Cyan,
+            border: Color::DarkGray,
+            focused_border: Color::Cyan,
+            error: Color::Red,
+            selected_background: Color::Reset,
+            ..Palette::default()
+        },
+        Symbols::default(),
+    );
+    theme.title = theme.text.add_modifier(Modifier::BOLD);
+    theme.selected = theme.accent.add_modifier(Modifier::REVERSED);
     let areas = crate::layout::areas(frame.area());
 
     render_header(app, &theme, frame, areas.header);
@@ -23,9 +38,15 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     render_detail(app, &theme, frame, areas.detail);
     render_if_visible(
         frame,
-        Paragraph::new(
-            "type to filter name/ID  Tab/Shift-Tab switch pane  Backspace edit  Esc clear/quit  Ctrl-C quit  ↑↓ move  PgUp/PgDn page",
-        )
+        Paragraph::new(theme.help_line([
+            ("Esc", "clear/quit"),
+            ("Ctrl-C", "quit"),
+            ("Tab/Shift-Tab", "pane"),
+            ("↑↓", "move/scroll"),
+            ("PgUp/PgDn", "page"),
+            ("Home/End", "first/last"),
+            ("Backspace", "edit"),
+        ]))
         .style(theme.muted),
         areas.help,
     );
@@ -47,15 +68,12 @@ fn render_header(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
 ) {
-    let status = if app.finished {
-        format!(
-            "{} games from {} libraries",
-            app.entries.len(),
-            app.libraries
-        )
-    } else {
-        format!("scanning {} roots / {} libraries", app.roots, app.libraries)
-    };
+    let problems = app
+        .problems
+        .iter()
+        .filter(|message| matches!(message, ScanMessage::Problem(_)))
+        .count();
+    let notes = app.problems.len() - problems;
     render_if_visible(
         frame,
         Paragraph::new(Line::from(vec![
@@ -71,27 +89,41 @@ fn render_header(
             ),
             Span::raw("  "),
             Span::styled(
-                if app.filter.is_empty() {
-                    "filter: all games".to_owned()
+                format!("Problems: {problems}"),
+                if problems == 0 {
+                    theme.muted
                 } else {
-                    format!("filter: {}", app.filter)
+                    theme.error
                 },
+            ),
+            Span::styled(format!("  Notes: {notes}"), theme.muted),
+            Span::styled(
+                format!(
+                    "  Entries: {}  Libraries: {}  Roots: {}",
+                    app.entries.len(),
+                    app.libraries,
+                    app.roots
+                ),
                 theme.muted,
             ),
         ])),
         area,
     );
-    if !app.finished && area.width > 0 && area.height >= 2 {
-        let mut spinner = Spinner::new()
-            .frames(SpinnerFrames::DOTS)
-            .label(status)
-            .theme(*theme);
-        for _ in 0..app.spinner.frame_index() {
-            spinner.tick();
-        }
+    if area.height >= 2 {
         render_if_visible(
             frame,
-            &spinner,
+            Paragraph::new(Line::from(vec![
+                Span::styled(" Filter: ", theme.accent.add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    if app.filter.is_empty() {
+                        "all entries"
+                    } else {
+                        &app.filter
+                    },
+                    theme.text,
+                ),
+                Span::styled("  · type a name or ID", theme.muted),
+            ])),
             ratatui::layout::Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
         );
     }
@@ -111,7 +143,13 @@ fn render_list(
     if app.focus == Focus::List {
         title.push_str(" · active");
     }
-    let block = theme.titled_block(title);
+    let block = theme
+        .titled_block(title)
+        .border_style(if app.focus == Focus::List {
+            theme.focused_border
+        } else {
+            theme.border
+        });
     let inner = block.inner(area);
     render_if_visible(frame, block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -208,7 +246,7 @@ fn render_detail(
     let mut title = if app.problems.is_empty() {
         "Details".to_owned()
     } else {
-        format!("Details · {} scan notes", app.problems.len())
+        format!("Details · {} scan messages", app.problems.len())
     };
     if app.focus == Focus::Detail {
         title.push_str(" · active");
@@ -227,7 +265,15 @@ fn render_detail(
         frame,
         Paragraph::new(lines)
             .style(theme.text)
-            .block(theme.titled_block(title))
+            .block(
+                theme
+                    .titled_block(title)
+                    .border_style(if app.focus == Focus::Detail {
+                        theme.focused_border
+                    } else {
+                        theme.border
+                    }),
+            )
             .scroll((u16::try_from(app.detail_offset).unwrap_or(u16::MAX), 0))
             .wrap(Wrap { trim: false }),
         area,
@@ -503,19 +549,95 @@ mod tests {
     }
 
     #[test]
-    fn completed_scan_removes_the_spinner_row() {
+    fn scan_status_and_totals_leave_the_filter_visible() {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(game())));
         app.update(Msg::Library(PathBuf::from("/steam")));
-        assert!(draw(&app, 100, 24).contains("scanning 0 roots / 1 libraries"));
+        let scanning = draw(&app, 120, 24);
+        assert!(scanning.contains("scanning"));
+        assert!(scanning.contains("Entries: 1  Libraries: 1  Roots: 0"));
+        assert!(
+            scanning
+                .lines()
+                .nth(1)
+                .unwrap()
+                .contains("Filter: all entries")
+        );
 
         app.update(Msg::Finished);
         let screen = draw(&app, 100, 24);
         assert!(screen.contains("scan complete"));
+        assert!(screen.contains("Entries: 1  Libraries: 1"));
         assert!(
-            !screen.contains("1 games from 1 libraries"),
-            "the spinner and its changing label must disappear once the scan finishes"
+            screen
+                .lines()
+                .nth(1)
+                .unwrap()
+                .contains("Filter: all entries")
         );
+    }
+
+    #[test]
+    fn diagnostic_counts_are_global_and_do_not_invent_severities() {
+        let mut app = App::new(24);
+        app.update(Msg::Game(Box::new(game())));
+        app.update(Msg::Problem("unreadable library".into()));
+        app.update(Msg::Note("duplicate library".into()));
+        app.update(Msg::Note("missing metadata".into()));
+        app.update(Msg::Key(crate::key::Key::Char('z')));
+        let screen = draw(&app, 120, 24);
+        let header = screen.lines().next().unwrap();
+        assert!(header.contains("Problems: 1  Notes: 2"));
+        assert!(!header.contains("Warning"));
+        assert!(screen.contains("Filter: z"));
+        assert!(screen.contains("No games match"));
+        assert!(screen.contains("Problem: unreadable library"));
+        assert!(screen.contains("Note: duplicate library"));
+        assert!(!screen.contains("3 scan notes"));
+    }
+
+    #[test]
+    fn focus_and_problem_color_have_textual_equivalents() {
+        use ratatui::style::Color;
+        let mut app = App::new(24);
+        app.update(Msg::Problem("unreadable library".into()));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        for focus in [crate::app::Focus::List, crate::app::Focus::Detail] {
+            app.focus = focus;
+            terminal.draw(|frame| render(&app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let header: String = (0..120).map(|x| buffer[(x, 0)].symbol()).collect();
+            let problem_column =
+                u16::try_from(header.chars().position(|c| c == 'P').unwrap()).unwrap();
+            assert_eq!(buffer[(problem_column, 0)].fg, Color::Red);
+            let areas = crate::layout::areas(buffer.area);
+            assert_eq!(
+                buffer[(areas.list.x, areas.list.y)].fg,
+                if focus == crate::app::Focus::List {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                }
+            );
+            let screen = draw(&app, 180, 24);
+            assert!(screen.contains(if focus == crate::app::Focus::List {
+                "Games (0) · active"
+            } else {
+                "Details · 1 scan messages · active"
+            }));
+            let footer = screen.lines().last().unwrap();
+            for key in [
+                "Esc",
+                "Ctrl-C",
+                "Tab/Shift-Tab",
+                "↑↓",
+                "PgUp/PgDn",
+                "Home/End",
+                "Backspace",
+            ] {
+                assert!(footer.contains(key));
+            }
+        }
     }
 
     #[test]
