@@ -1,0 +1,35 @@
+[package]
+name = "dxray-tui"
+version = "0.0.1"
+description = "Terminal browser for a whole Steam library: games, their executables, renderer verdicts and Proton's NVAPI policy."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "dxray-tui"
+path = "src/main.rs"
+
+# A separate binary from `dxray` on purpose, and the reason is the dependency
+# list below. `dxray` is the thing people put in scripts, and it has exactly one
+# dependency; a terminal interface costs a dozen. Keeping them in one binary
+# would put every one of those crates behind a `--tui` flag that a script never
+# passes. See the test in `crates/dxray-cli/tests/dependencies.rs`, which fails
+# if `ratatui` ever becomes reachable from `dxray`.
+[dependencies]
+dxray-core = { path = "../dxray-core" }
+# `default-features = false` drops the calendar widget, `ratatui-macros` and
+# `palette` — with them, `time` and its dependencies. Nothing here uses any of
+# it. It does *not* drop the layout cache: `lru` and `kasuari` are unconditional
+# dependencies of `ratatui-core`, not feature-gated, and arrive either way.
+#
+# What is left is still 68 crates against `dxray`'s 19. That number is the whole
+# argument for this being a second binary.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+ratatui-tea = "0.2.0"
+ratatui-bubbletea-theme = "0.2.0"
+ratatui-bubbletea-components = "0.2.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "dxray-core"
+version = "0.0.1"
+description = "Turns the libraries a PE image links against into a verdict about which graphics APIs and vendor features it can reach."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dxray-pe = { path = "../dxray-pe" }
+
+[lints]
+workspace = true

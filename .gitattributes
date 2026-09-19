@@ -1,0 +1,2 @@
+# Keep text files consistent across supported Linux development environments.
+* text=auto eol=lf

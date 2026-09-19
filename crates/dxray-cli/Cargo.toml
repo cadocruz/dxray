@@ -1,0 +1,20 @@
+[package]
+name = "dxray-cli"
+version = "0.0.1"
+description = "Command line front end: reports machine, version and imports for PE files and directories of them."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "dxray"
+path = "src/main.rs"
+
+[dependencies]
+dxray-core = { path = "../dxray-core" }
+dxray-pe = { path = "../dxray-pe" }
+clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true

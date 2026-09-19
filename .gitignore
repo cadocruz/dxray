@@ -1,0 +1,11 @@
+/target
+
+# Local screenshots are not project assets.
+Captura_de_tela_*.png
+
+# Local review notes are not maintained project documents.
+codereview*.md
+
+# Local worklists and machine-specific test results stay out of Git.
+TODO.md
+real-test-results.md

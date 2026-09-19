@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/dxray-cli",
+    "crates/dxray-core",
+    "crates/dxray-pe",
+    "crates/dxray-tui",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+repository = "https://github.com/cadocruz/dxray"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

@@ -1,0 +1,13 @@
+[package]
+name = "dxray-pe"
+version = "0.0.1"
+description = "Reads imports, machine and version resources out of a PE image. No dependencies."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
