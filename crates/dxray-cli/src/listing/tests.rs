@@ -301,6 +301,14 @@ fn render_named(out: &mut String, games: &[Game], name_origins: bool) {
 /// Tests take the pair rather than one at a time on purpose: what is worth
 /// asserting here is mostly that the two agree.
 fn render_both(games: &[Game], name_origins: bool) -> super::Rendered {
+    render_view(games, name_origins, crate::report::Presentation::Standard)
+}
+
+fn render_view(
+    games: &[Game],
+    name_origins: bool,
+    view: crate::report::Presentation,
+) -> super::Rendered {
     let mut rendered = super::Rendered::default();
     render_games(
         &mut super::Sink {
@@ -315,8 +323,26 @@ fn render_both(games: &[Game], name_origins: bool) -> super::Rendered {
         },
         &mut dxray_core::proton::Builds::default(),
         name_origins,
+        view,
     );
     rendered
+}
+
+#[test]
+fn inventory_presentations_leave_json_bytes_unchanged() {
+    let tree = Tree::new("view-json-bytes");
+    let games = vec![tree.install(570, "entry", "Entry", "Entry.exe")];
+    for origins in [false, true] {
+        let legacy = render_both(&games, origins);
+        for view in [
+            crate::report::Presentation::Compact,
+            crate::report::Presentation::Full,
+        ] {
+            let rendered = render_view(&games, origins, view);
+            assert_eq!(rendered.json.as_bytes(), legacy.json.as_bytes());
+            assert_ne!(rendered.text, legacy.text);
+        }
+    }
 }
 
 #[test]
@@ -875,6 +901,7 @@ fn a_demoted_game_does_not_lose_the_note_that_moves_the_exit_code() {
         },
         &mut dxray_core::proton::Builds::default(),
         false,
+        crate::report::Presentation::Standard,
     );
     let out = rendered.text;
 

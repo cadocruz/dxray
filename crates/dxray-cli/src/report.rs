@@ -29,6 +29,14 @@ pub enum Presentation {
 
 /// Explicit human modes share evidence with the standard formatter.
 pub fn present(record: &Record, mode: Presentation) -> String {
+    present_with_context(record, mode, None)
+}
+
+pub(crate) fn present_with_context(
+    record: &Record,
+    mode: Presentation,
+    inventory: Option<(&str, &str)>,
+) -> String {
     if mode == Presentation::Standard {
         return render(record);
     }
@@ -43,7 +51,10 @@ pub fn present(record: &Record, mode: Presentation) -> String {
         row(
             &mut out,
             "origin",
-            "direct path (launcher context unavailable)",
+            inventory.map_or(
+                "direct path (launcher context unavailable)",
+                |(origin, _)| origin,
+            ),
         );
         if let Some(error) = &record.error {
             row(&mut out, "error", error);
@@ -76,7 +87,10 @@ pub fn present(record: &Record, mode: Presentation) -> String {
     row(
         &mut out,
         "NVAPI",
-        "static Proton policy not assessed: no Proton/Steam app context supplied",
+        inventory.map_or(
+            "static Proton policy not assessed: no Proton/Steam app context supplied",
+            |(_, policy)| policy,
+        ),
     );
     row(
         &mut out,

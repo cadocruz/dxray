@@ -144,7 +144,7 @@ fn ranking(dir: &Path, survey: &Survey) -> String {
     ranking_paths(dir, survey, false)
 }
 
-fn ranking_paths(dir: &Path, survey: &Survey, full_paths: bool) -> String {
+pub(crate) fn ranking_paths(dir: &Path, survey: &Survey, full_paths: bool) -> String {
     let mut out = String::with_capacity(512);
     let _ = writeln!(out, "{}", dir.display());
     labelled(

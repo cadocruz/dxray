@@ -45,8 +45,14 @@ enum Commands {
     /// Rank executables in game installations and inspect the best candidate.
     Game(GameArgs),
     /// List installations declared by all supported launchers.
+    #[command(
+        after_help = "Examples:\n  dxray installed --view compact\n  dxray installed --view full\n  dxray installed --json"
+    )]
     Installed(InventoryArgs),
     /// List installations declared by Steam.
+    #[command(
+        after_help = "Examples:\n  dxray steam --view compact\n  dxray steam --view full\n  dxray steam --json"
+    )]
     Steam(InventoryArgs),
     /// Read a Proton build's static NVAPI policy.
     Nvapi(NvapiArgs),
@@ -95,9 +101,8 @@ struct GameArgs {
 
 #[derive(Args)]
 struct InventoryArgs {
-    /// Emit the inventory as JSONL.
-    #[arg(long)]
-    json: bool,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Args)]
@@ -116,8 +121,8 @@ fn main() -> ExitCode {
         Commands::Game(args) => {
             rank_installs(&args.paths, args.output.json, args.output.presentation())
         }
-        Commands::Installed(args) => list_games(dxray_core::launcher::all(), args.json),
-        Commands::Steam(args) => list_games(listing::STEAM_ONLY, args.json),
+        Commands::Installed(args) => list_games(dxray_core::launcher::all(), &args.output),
+        Commands::Steam(args) => list_games(listing::STEAM_ONLY, &args.output),
         Commands::Nvapi(args) => read_policy(&args.proton_path, &args.appid),
     }
 }
@@ -258,8 +263,9 @@ fn read_policy(target: &Path, appids: &[String]) -> ExitCode {
 /// nothing else. One scan, one set of counts, one exit code: the flag cannot
 /// alter what a run considers a failure, because the status is drawn from the
 /// listing and not from what was printed.
-fn list_games(launchers: &[&dyn dxray_core::Launcher], json: bool) -> ExitCode {
-    let found = listing::scan(launchers);
+fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> ExitCode {
+    let json = output.json;
+    let found = listing::scan_with_view(launchers, output.presentation());
 
     if found.roots == 0 {
         // Nothing was scanned, so there are no counts to report and no summary

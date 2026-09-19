@@ -17,10 +17,7 @@ fn subcommand_help_and_option_scopes() {
             assert_eq!(text.contains("--appid"), command == "nvapi");
             assert_eq!(text.contains("--json"), command != "nvapi");
             assert_eq!(text.contains("--recursive"), command == "inspect");
-            assert_eq!(
-                text.contains("--view"),
-                matches!(command, "inspect" | "game")
-            );
+            assert_eq!(text.contains("--view"), command != "nvapi");
         }
     }
     let mut invalid = vec![

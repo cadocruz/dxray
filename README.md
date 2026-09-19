@@ -87,7 +87,7 @@ Start the terminal browser:
 dxray-tui
 ```
 
-For `inspect` and `game`, use `--view compact` for static renderer evidence,
+For `inspect`, `game`, `installed` and `steam`, use `--view compact` for static renderer evidence,
 features and essential caveats, or `--view full` for absolute paths, versions,
 imports and executable ranking. Compact output retains each input's path.
 `--view` cannot be combined with `--json`. Only `inspect` accepts
@@ -95,6 +95,19 @@ imports and executable ranking. Compact output retains each input's path.
 Without `--view`, reports use the standard text layout. Invalid
 options exit 2 before scanning. Direct paths do not provide launcher
 or Proton context, so these reports mark the static NVAPI policy as not assessed.
+
+Inventory views identify entries by launcher, launcher ID (and Steam AppID when
+available) and installation path. Compact keeps search caveats visible; full adds
+library and launcher roots, the complete executable ranking and static evidence.
+NVAPI findings describe the available static Proton policy, not runtime behavior.
+Notes and problems remain visible in both views, with the existing exit codes.
+
+```sh
+dxray installed --view compact
+dxray installed --view full
+dxray steam --view compact
+dxray steam --view full
+```
 
 Use `--json` with `inspect`, `game`, `installed` or `steam` when another tool
 will consume the output. `nvapi` intentionally has no JSON format yet.

@@ -530,7 +530,15 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
 ///
 /// Both presentations, in one pass. The returned [`Listing`] holds the text
 /// and the JSON of the same walk, whichever the caller ends up printing.
+#[cfg(test)]
 pub fn scan(launchers: &[&dyn Launcher]) -> Listing {
+    scan_with_view(launchers, crate::report::Presentation::Standard)
+}
+
+pub fn scan_with_view(
+    launchers: &[&dyn Launcher],
+    presentation: crate::report::Presentation,
+) -> Listing {
     let mut render = Render {
         listing: Listing::new(launchers.len() > 1),
         // One reading per Proton build rather than one per game. A library
@@ -538,6 +546,7 @@ pub fn scan(launchers: &[&dyn Launcher]) -> Listing {
         // same two thousand lines a hundred times.
         builds: Builds::default(),
         install: None,
+        presentation,
     };
     // Discarded, not ignored: this visitor never breaks, because it has nothing
     // to cancel and no channel that can go away. That is the whole of what a
@@ -549,6 +558,7 @@ pub fn scan(launchers: &[&dyn Launcher]) -> Listing {
 
 /// Accumulates the listing as the walk finds things.
 struct Render {
+    presentation: crate::report::Presentation,
     listing: Listing,
     builds: Builds,
     /// The installation the walk is currently inside, so every row below it can
@@ -729,6 +739,7 @@ impl dxray_core::Visitor for Render {
                 },
                 &mut self.builds,
                 self.listing.name_origins,
+                self.presentation,
             );
         }
         // Records that could not be used but cost nothing: printed with the
@@ -873,6 +884,7 @@ fn render_games(
     place: Place<'_>,
     builds: &mut Builds,
     name_origins: bool,
+    presentation: crate::report::Presentation,
 ) {
     if games.is_empty() {
         // No JSON counterpart, and none is missing: this line is the *absence*
@@ -895,6 +907,8 @@ fn render_games(
         // One call, shared with the terminal browser, so that the facts
         // established about a game cannot depend on which surface asked.
         let facts = dxray_core::inspect(game, place.library, builds);
+        let human = (presentation != crate::report::Presentation::Standard)
+            .then(|| inventory_entry(game, place, &facts, presentation));
         let best = crate::game::best_rows(&game.install_dir, facts.survey);
         let lacks_evidence = best.lacks_evidence();
 
@@ -922,6 +936,9 @@ fn render_games(
         let _ = writeln!(one.text, "    {:<8} {}", "", game.install_dir.display());
         for (label, value) in &rows {
             game_row(&mut one.text, label, value);
+        }
+        if let Some(human) = human {
+            one.text = human;
         }
         push_game(
             &mut one.json,
@@ -952,6 +969,92 @@ fn render_games(
     }
     sink.text.push_str(&demoted.text);
     sink.json.push_str(&demoted.json);
+}
+
+fn inventory_entry(
+    game: &Game,
+    place: Place<'_>,
+    facts: &dxray_core::inspect::Inspection,
+    presentation: crate::report::Presentation,
+) -> String {
+    use crate::report::Presentation;
+    let mut out = format!("\nEntry: {}\n", game.name);
+    game_row(&mut out, "origin", game.origin.label());
+    game_row(&mut out, "identity", &game.identity.to_string());
+    if let Some(appid) = game.identity.steam_appid() {
+        game_row(&mut out, "AppID", &appid.to_string());
+    }
+    game_row(&mut out, "install", &display_path(&game.install_dir));
+    if presentation == Presentation::Full {
+        game_row(&mut out, "library", &display_path(place.library));
+        if let Some(root) = place.install {
+            game_row(&mut out, "launcher root", &display_path(root));
+        }
+    }
+    match &facts.survey {
+        Ok(survey) => {
+            game_row(
+                &mut out,
+                "search",
+                if survey.is_incomplete() {
+                    "incomplete"
+                } else {
+                    "complete within scan scope"
+                },
+            );
+            if presentation == Presentation::Full {
+                out.push_str(&crate::game::ranking_paths(&game.install_dir, survey, true));
+            } else {
+                for note in &survey.notes {
+                    game_row(&mut out, "caveat", &note.to_string());
+                }
+            }
+            if !survey.has_evidence() {
+                game_row(
+                    &mut out,
+                    "caveat",
+                    "No executable carries evidence of being the game; this does not classify the installation as a tool.",
+                );
+            }
+            if let Some(best) = survey.best() {
+                let record = crate::record::Record::read(&best.path);
+                out.push_str(&crate::report::present_with_context(
+                    &record,
+                    presentation,
+                    Some((game.origin.label(), &facts.nvapi.verdict)),
+                ));
+            } else {
+                game_row(
+                    &mut out,
+                    "renderer",
+                    "not determined statically: no executable found",
+                );
+                game_row(&mut out, "NVAPI", &facts.nvapi.verdict);
+            }
+        }
+        Err(error) => {
+            game_row(
+                &mut out,
+                "search",
+                &format!("installation could not be read: {error}"),
+            );
+            game_row(
+                &mut out,
+                "renderer",
+                "not determined statically: installation unreadable",
+            );
+            game_row(&mut out, "NVAPI", &facts.nvapi.verdict);
+        }
+    }
+    if let Some(script) = &facts.nvapi.script {
+        game_row(&mut out, "Proton script", &display_path(script));
+    }
+    game_row(
+        &mut out,
+        "policy scope",
+        "NVAPI is a static Proton policy finding, not confirmation of runtime use.",
+    );
+    out
 }
 
 /// The two renderings of one library's games, and the caveat list they share.

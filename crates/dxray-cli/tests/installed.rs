@@ -8,8 +8,105 @@
 
 mod common;
 
+#[test]
+fn inventory_views_preserve_entries_diagnostics_and_status() {
+    let home = TempDir::new("inventory-views");
+    let steam = fake_steam(&home);
+    let heroic = fake_heroic(&home, true);
+    // Same display name across launchers must retain distinct identities.
+    std::fs::write(
+        steam.join("steamapps/common/dota 2 beta/dota2.exe"),
+        Image::x64().importing(&["d3d11.dll"]).build(),
+    )
+    .unwrap();
+    std::fs::write(
+        steam.join("steamapps/common/dota 2 beta/nvngx_dlss.dll"),
+        Image::x64().build(),
+    )
+    .unwrap();
+    let manifest = steam.join("steamapps/appmanifest_570.acf");
+    let contents = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("Dota 2", "Hades");
+    std::fs::write(manifest, contents).unwrap();
+    std::fs::write(
+        heroic.join("store_cache/gog_library.json"),
+        "{\"library\":[{\"app_name\":\"1207658691\",\"title\":\"Hades\",\"is_installed\":true}]}",
+    )
+    .unwrap();
+    std::fs::write(steam.join("steamapps/appmanifest_999.acf"), "broken").unwrap();
+    for command in ["installed", "steam"] {
+        let legacy = dxray_with_home(home.path(), [command]);
+        let json = dxray_with_home(home.path(), [command, "--json"]);
+        assert!(!stdout_of(&legacy).contains("Entry:"));
+        for view in ["compact", "full"] {
+            let out = dxray_with_home(home.path(), [command, "--view", view]);
+            let text = stdout_of(&out);
+            assert_eq!(out.status.code(), legacy.status.code());
+            assert_eq!(out.stderr, legacy.stderr);
+            assert!(text.contains("Direct3D 11"));
+            assert!(text.contains("DLSS"));
+            for token in [
+                "Entry: Hades",
+                "Steam",
+                "AppID",
+                "570",
+                "renderer",
+                "static",
+                "unreadable",
+                "dota 2 beta",
+            ] {
+                assert!(text.contains(token), "missing {token}: {text}");
+            }
+            if command == "installed" {
+                assert_eq!(text.matches("Entry: Hades").count(), 2);
+                for token in ["Heroic", "1207658691", "Games/Hades", "note"] {
+                    assert!(text.contains(token), "missing {token}: {text}");
+                }
+            }
+            if view == "full" {
+                assert!(text.contains("ranked"));
+                assert!(text.contains("launcher root"));
+            }
+            let conflict = dxray_with_home(home.path(), [command, "--view", view, "--json"]);
+            assert_eq!(conflict.status.code(), Some(2));
+            assert!(conflict.stdout.is_empty());
+            assert!(!stderr_of(&conflict).contains("broken"));
+        }
+        assert_eq!(
+            dxray_with_home(home.path(), [command]).stdout,
+            legacy.stdout
+        );
+        assert_eq!(
+            dxray_with_home(home.path(), [command, "--json"]).stdout,
+            json.stdout
+        );
+    }
+}
+
 use common::{Image, TempDir, dxray_with_home, stderr_of, stdout_of};
 use std::path::{Path, PathBuf};
+
+#[test]
+fn inventory_views_distinguish_empty_and_unavailable_installs() {
+    let home = TempDir::new("inventory-empty");
+    let root = fake_steam_tool(&home);
+    std::fs::remove_file(root.join("steamapps/common/dota 2 beta/dota2.exe")).unwrap();
+    std::fs::remove_dir(root.join("steamapps/common/dota 2 beta")).unwrap();
+    for command in ["installed", "steam"] {
+        let legacy = dxray_with_home(home.path(), [command]);
+        for view in ["compact", "full"] {
+            let out = dxray_with_home(home.path(), [command, "--view", view]);
+            assert_eq!(out.status.code(), legacy.status.code());
+            let text = stdout_of(&out);
+            assert!(text.contains("no executable found"));
+            assert!(text.contains("installation could not be read"));
+            assert!(text.contains("Proton Experimental"));
+            assert!(text.contains("Dota 2"));
+            assert!(text.contains("not determined statically"));
+        }
+    }
+}
 
 /// Builds a Steam install under `home` holding one game.
 fn fake_steam(home: &TempDir) -> PathBuf {
