@@ -236,9 +236,9 @@ fn render_list(
     area: ratatui::layout::Rect,
 ) {
     let mut title = if app.filter.is_empty() {
-        format!("Games ({})", app.entries.len())
+        format!("Entries ({})", app.entries.len())
     } else {
-        format!("Games ({} of {})", app.filtered_len(), app.entries.len())
+        format!("Entries ({} of {})", app.filtered_len(), app.entries.len())
     };
     if app.focus == Focus::List {
         title.push_str(" · active");
@@ -301,17 +301,18 @@ fn render_list(
 /// behind both are in the detail pane, under `Note:`, so a marker here is never
 /// a mark with no explanation anywhere.
 fn caveats(entry: &Entry) -> String {
-    let mut out = String::new();
-    // First, because it qualifies the headline harder than the others do: the
-    // renderer beside it was read off the best of several executables that
-    // between them argue nothing about being a game.
-    //
-    // `no evidence` and not `tool`. This says what was observed — nothing —
-    // and stops there. Naming the category is the claim that `DownloadType`
-    // made and that marked shipped games as tooling; the sentence under it, in
-    // the detail pane, is the same one `dxray --game` prints.
-    if entry.lacks_evidence() {
-        out.push_str(" · no evidence");
+    let mut out = match entry.carries_evidence {
+        Some(true) => " · static evidence found",
+        Some(false) => " · no static game evidence",
+        None => " · evidence unavailable",
+    }
+    .to_owned();
+    // Survey evidence and readability of the selected executable are distinct.
+    if entry.carries_evidence.is_some()
+        && (matches!(&entry.best, Best::Unwalkable(_))
+            || matches!(&entry.best, Best::Ranked(ranked) if ranked.verdict.is_err()))
+    {
+        out.push_str(" · evidence unavailable");
     }
     if entry.tie.is_some() {
         out.push_str(" · tied");
@@ -735,6 +736,73 @@ mod tests {
         entry
     }
 
+    #[test]
+    fn list_uses_entries_and_reports_survey_evidence_without_categories() {
+        for (evidence, status) in [
+            (Some(true), "static evidence found"),
+            (Some(false), "no static game evidence"),
+            (None, "evidence unavailable"),
+        ] {
+            let mut entry = game();
+            entry.name = "Example".into();
+            entry.carries_evidence = evidence;
+            if evidence.is_none() {
+                entry.best = Best::Unwalkable("directory is absent".into());
+            }
+            let mut app = App::new(24);
+            app.update(Msg::Game(Box::new(entry)));
+            for width in [32, 60, 99, 100, 180, 240] {
+                app.update(Msg::Resize(width, 24));
+                let selected = app.selected;
+                let screen = draw(&app, width, 24);
+                assert!(screen.contains("Entries (1)"), "{screen}");
+                assert!(!screen.contains("Games ("));
+                assert!(!screen.contains("Tools & Runtimes"));
+                if width >= 180 {
+                    let row = screen
+                        .lines()
+                        .find(|line| line.contains("Example"))
+                        .unwrap();
+                    assert!(row.contains("Steam · 440"), "{row}");
+                    assert!(row.contains(status), "{row}");
+                }
+                app.filter = "example".into();
+                let screen = draw(&app, width, 24);
+                assert!(screen.contains("Entries (1 of 1)"), "{screen}");
+                assert_eq!(app.selected, selected);
+                app.filter = "absent".into();
+                let screen = draw(&app, width, 24);
+                assert!(screen.contains("Entries (0 of 1)"), "{screen}");
+                assert!(screen.contains("No matches"));
+                app.filter.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn list_preserves_found_evidence_when_selected_executable_is_unreadable() {
+        let mut entry = ranked_entry(Err("permission denied".into()));
+        entry.name = "Example".into();
+        entry.carries_evidence = Some(true);
+        entry.incomplete = true;
+        let mut app = App::new(24);
+        app.update(Msg::Game(Box::new(entry)));
+        let screen = draw(&app, 400, 24);
+        let row = screen
+            .lines()
+            .find(|line| line.contains("Example"))
+            .unwrap();
+        for text in [
+            "static evidence found",
+            "evidence unavailable",
+            "not searched in full",
+            "executable unreadable",
+        ] {
+            assert!(row.contains(text), "{row}");
+        }
+        assert!(!row.contains("no static game evidence"));
+    }
+
     fn missing_install_entry(kind: io::ErrorKind, message: &str) -> Entry {
         Entry::build(
             Game {
@@ -783,7 +851,7 @@ mod tests {
             app.update(Msg::Resize(width, 24));
             app.focus = Focus::List;
             let list = draw(&app, width, 24);
-            assert!(list.contains("Games (1)"));
+            assert!(list.contains("Entries (1)"));
             assert_eq!(list.contains("Details"), width >= 100);
             if width < 100 {
                 for text in [
@@ -808,7 +876,7 @@ mod tests {
             assert_eq!(app.detail_offset, usize::from(viewport.height));
             let detail = draw(&app, width, 24);
             assert!(detail.contains("Details"));
-            assert_eq!(detail.contains("Games (1)"), width >= 100);
+            assert_eq!(detail.contains("Entries (1)"), width >= 100);
             app.update(Msg::Key(Key::End));
             app.update(Msg::Resize(80, 30));
             assert_eq!(app.focus, Focus::Detail);
@@ -922,7 +990,7 @@ mod tests {
             );
             let screen = draw(&app, 180, 24);
             assert!(screen.contains(if focus == crate::app::Focus::List {
-                "Games (0) · active"
+                "Entries (0) · active"
             } else {
                 "Details · active"
             }));
@@ -1024,7 +1092,7 @@ mod tests {
                 assert_eq!(screen.contains("Resize: 32x12 min"), too_small);
                 if !too_small {
                     assert!(screen.contains("Search: [type name or AppID]"));
-                    assert_eq!(screen.contains("Games (1)"), focus == Focus::List);
+                    assert_eq!(screen.contains("Entries (1)"), focus == Focus::List);
                     assert_eq!(screen.contains("Details"), focus == Focus::Detail);
                 }
                 assert_eq!(app.selected, selected);
@@ -1222,7 +1290,7 @@ mod tests {
         app.update(Msg::Game(Box::new(entry)));
 
         let initial = draw(&app, 120, 12);
-        assert!(initial.contains("Games (1) · active"));
+        assert!(initial.contains("Entries (1) · active"));
         assert!(!initial.contains("scroll proof 20"));
 
         app.update(Msg::Key(crate::Key::Tab));
@@ -1316,7 +1384,7 @@ mod tests {
 {screen}"
         );
         assert!(
-            screen.contains("· no evidence"),
+            screen.contains("· no static game evidence"),
             "the marker is drawn in the list column, got:
 {screen}"
         );
@@ -1371,7 +1439,9 @@ mod tests {
 
         let screen = draw(&app, 240, 24);
         assert!(
-            screen.contains(" · no evidence · tied · not searched in full"),
+            screen.contains(
+                " · no static game evidence · evidence unavailable · tied · not searched in full"
+            ),
             "the three markers are drawn in that order and next to each other, got:\n{screen}"
         );
     }
@@ -1389,7 +1459,7 @@ mod tests {
 
         let screen = draw(&app, 160, 40);
         assert!(
-            !screen.contains("no evidence"),
+            !screen.contains("no static game evidence"),
             "got:
 {screen}"
         );
@@ -1420,7 +1490,7 @@ mod tests {
 {screen}"
         );
         assert!(
-            !screen.contains("no evidence"),
+            !screen.contains("no static game evidence"),
             "got:
 {screen}"
         );
