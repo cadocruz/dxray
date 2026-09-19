@@ -400,14 +400,64 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("{} ({})", entry.name, entry.id_label())),
         Line::from(format!("Source: {}", entry.origin.label())),
-        Line::from(format!("Install: {}", entry.install_dir.display())),
-        Line::from(format!("Library: {}", entry.library.display())),
         Line::from(""),
-        Line::from(format!("Renderer: {}", entry.headline())),
-        Line::from(format!("NVAPI: {}", entry.nvapi.verdict)),
+        Line::from(format!("Renderer (static): {}", entry.headline())),
     ];
+    let qualifications = caveats(entry);
+    if !qualifications.is_empty() {
+        lines.insert(2, Line::from(format!("Analysis:{qualifications}")));
+    }
+    match &entry.best {
+        Best::Ranked(ranked) => {
+            if let Ok(verdict) = &ranked.verdict
+                && verdict.renderers.is_empty()
+            {
+                lines.push(Line::from("Renderer unknown from static evidence."));
+            }
+            render_verdict(&mut lines, ranked);
+        }
+        Best::NoExecutable => lines.push(Line::from("No executable was found in this install.")),
+        Best::Unwalkable(error) => {
+            lines.push(Line::from(format!("Could not read install: {error}")));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from("Proton / NVAPI — static policy:"));
+    lines.push(Line::from(format!("NVAPI: {}", entry.nvapi.verdict)));
+    lines.push(Line::from("Policy does not establish runtime enablement."));
+    lines.push(Line::from(""));
+    lines.push(Line::from("Paths and selection evidence:"));
+    lines.push(Line::from(format!(
+        "Install: {}",
+        entry.install_dir.display()
+    )));
+    lines.push(Line::from(format!("Library: {}", entry.library.display())));
     if let Some(script) = &entry.nvapi.script {
         lines.push(Line::from(format!("Proton script: {}", script.display())));
+    }
+    if let Best::Ranked(ranked) = &entry.best {
+        lines.push(Line::from(format!(
+            "Executable: {} (score {}, {} candidates)",
+            ranked.path.display(),
+            ranked.score,
+            ranked.of
+        )));
+        if ranked.has_evidence() {
+            lines.extend(
+                ranked
+                    .reasons
+                    .iter()
+                    .map(|reason| Line::from(format!("• {reason}"))),
+            );
+        } else {
+            // `dxray --game`'s own sentence. A score with nothing under it
+            // reads as truncated output rather than as the finding it is:
+            // this is what a Visual C++ redistributable looks like when it
+            // is the best thing in the directory.
+            lines.push(Line::from(
+                "• nothing observed argues that this is the game",
+            ));
+        }
     }
     if !entry.nvapi.condition.is_empty() {
         lines.push(Line::from("NVAPI condition:"));
@@ -418,37 +468,6 @@ fn detail_lines(entry: &Entry) -> Vec<Line<'static>> {
                 .iter()
                 .map(|line| Line::from(format!("  {line}"))),
         );
-    }
-    match &entry.best {
-        Best::Ranked(ranked) => {
-            lines.push(Line::from(format!(
-                "Executable: {} (score {}, {} candidates)",
-                ranked.path.display(),
-                ranked.score,
-                ranked.of
-            )));
-            if ranked.has_evidence() {
-                lines.extend(
-                    ranked
-                        .reasons
-                        .iter()
-                        .map(|reason| Line::from(format!("• {reason}"))),
-                );
-            } else {
-                // `dxray --game`'s own sentence. A score with nothing under it
-                // reads as truncated output rather than as the finding it is:
-                // this is what a Visual C++ redistributable looks like when it
-                // is the best thing in the directory.
-                lines.push(Line::from(
-                    "• nothing observed argues that this is the game",
-                ));
-            }
-            render_verdict(&mut lines, ranked);
-        }
-        Best::NoExecutable => lines.push(Line::from("No executable was found in this install.")),
-        Best::Unwalkable(error) => {
-            lines.push(Line::from(format!("Could not read install: {error}")));
-        }
     }
     lines.extend(
         entry
@@ -471,9 +490,16 @@ fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
         }
         Ok(verdict) => {
             lines.push(Line::from("Evidence:"));
+            lines.push(Line::from(
+                "Imports do not prove the renderer used at runtime.",
+            ));
             render_findings(lines, "Renderers", &verdict.renderers);
             render_findings(lines, "Infrastructure", &verdict.infrastructure);
+            lines.push(Line::from(""));
             render_findings(lines, "Features", &verdict.features);
+            lines.push(Line::from(
+                "DLL presence does not prove a feature is enabled.",
+            ));
             render_findings(lines, "Local overrides", &verdict.local_overrides);
         }
         Err(error) => {
@@ -758,6 +784,84 @@ mod tests {
     }
 
     #[test]
+    fn responsive_minimum_boundaries_preserve_focus_and_selection() {
+        use crate::app::Focus;
+        let mut app = App::new(12);
+        app.update(Msg::Game(Box::new(game())));
+        let selected = app.selected;
+        for (width, height) in [(31, 12), (32, 11), (32, 12), (99, 11), (100, 11)] {
+            app.update(Msg::Resize(width, height));
+            for focus in [Focus::List, Focus::Detail] {
+                app.focus = focus;
+                let screen = draw(&app, width, height);
+                let too_small = width < 32 || height < 12;
+                assert_eq!(screen.contains("Resize: 32x12 min"), too_small);
+                if !too_small {
+                    assert!(screen.contains("Filter: all"));
+                    assert_eq!(screen.contains("Games (1)"), focus == Focus::List);
+                    assert_eq!(screen.contains("Details"), focus == Focus::Detail);
+                }
+                assert_eq!(app.selected, selected);
+                assert_eq!(app.focus, focus);
+            }
+        }
+    }
+
+    #[test]
+    fn detail_hierarchy_keeps_static_limits_and_long_evidence() {
+        let mut entry = ranked_entry(Ok(analyse(&Evidence {
+            imports: vec!["d3d12.dll".into()],
+            neighbours: vec![
+                "nvngx_dlss.dll".into(),
+                "libxess.dll".into(),
+                "sl.interposer.dll".into(),
+            ],
+            ..Evidence::default()
+        })));
+        entry.notes.push("selection remains uncertain".into());
+        entry
+            .nvapi
+            .condition
+            .push("original condition evidence".into());
+        let mut app = App::new(80);
+        app.update(Msg::Resize(200, 80));
+        app.update(Msg::Game(Box::new(entry)));
+        let screen = draw(&app, 200, 80);
+        let mut previous = 0;
+        for section in [
+            "Team Fortress 2 (440)",
+            "Source: Steam",
+            "Renderer (static):",
+            "Renderers:",
+            "Features:",
+            "Proton / NVAPI — static policy:",
+            "Paths and selection evidence:",
+            "Executable:",
+            "NVAPI condition:",
+            "Note: selection remains uncertain",
+        ] {
+            let position = screen
+                .find(section)
+                .unwrap_or_else(|| panic!("missing {section}:\n{screen}"));
+            assert!(position >= previous, "out of order: {section}");
+            previous = position;
+        }
+        for evidence in [
+            "Imports do not prove the renderer used at runtime.",
+            "DLL presence does not prove a feature is enabled.",
+            "Policy does not establish runtime enablement.",
+            "nvngx_dlss.dll (neighbour)",
+            "libxess.dll (neighbour)",
+            "sl.interposer.dll (neighbour)",
+            "score 42, 2 candidates",
+            "shipping executable",
+            "original condition evidence",
+        ] {
+            assert!(screen.contains(evidence), "missing {evidence}:\n{screen}");
+        }
+    }
+
+    #[test]
     fn detail_shows_the_proton_script_and_verbatim_conditional_nvapi_lines() {
         let mut app = App::new(24);
         let mut entry = game();
@@ -864,6 +968,7 @@ mod tests {
             empty_screen.contains("Evidence: executable read; no recognised graphics findings.")
         );
         assert!(!empty_screen.contains("Evidence unavailable:"));
+        assert!(empty_screen.contains("Renderer unknown from static evidence."));
 
         let mut unreadable = App::new(24);
         unreadable.update(Msg::Game(Box::new(ranked_entry(Err(
