@@ -870,97 +870,6 @@ fn library_label(library: &Path, root: Option<&Path>, origin: Origin) -> String 
     display_path(library)
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-fn inventory_entry(
-    game: &Game,
-    place: Place<'_>,
-    facts: &dxray_core::inspect::Inspection,
-    presentation: crate::report::Presentation,
-) -> String {
-    use crate::report::Presentation;
-    if presentation == Presentation::Compact {
-        return compact_entry(game, place.library, facts);
-    }
-    let mut out = format!("\nEntry: {}\n", game.name);
-    game_row(&mut out, "origin", game.origin.label());
-    game_row(&mut out, "identity", &game.identity.to_string());
-    if let Some(appid) = game.identity.steam_appid() {
-        game_row(&mut out, "AppID", &appid.to_string());
-    }
-    game_row(&mut out, "install", &display_path(&game.install_dir));
-    if presentation == Presentation::Full {
-        game_row(&mut out, "library", &display_path(place.library));
-        if let Some(root) = place.install {
-            game_row(&mut out, "launcher root", &display_path(root));
-        }
-    }
-    match &facts.survey {
-        Ok(survey) => {
-            game_row(
-                &mut out,
-                "search",
-                if survey.is_incomplete() {
-                    "incomplete"
-                } else {
-                    "complete within scan scope"
-                },
-            );
-            if presentation == Presentation::Full {
-                out.push_str(&crate::game::ranking_paths(&game.install_dir, survey, true));
-            } else {
-                for note in &survey.notes {
-                    game_row(&mut out, "caveat", &note.to_string());
-                }
-            }
-            if !survey.has_evidence() {
-                game_row(
-                    &mut out,
-                    "caveat",
-                    "No executable carries evidence of being the game; this does not classify the installation as a tool.",
-                );
-            }
-            if let Some(best) = survey.best() {
-                let record = crate::record::Record::read(&best.path);
-                out.push_str(&crate::report::present_with_context(
-                    &record,
-                    presentation,
-                    Some((game.origin.label(), &facts.nvapi.verdict)),
-                ));
-            } else {
-                game_row(
-                    &mut out,
-                    "renderer",
-                    "not determined statically: no executable found",
-                );
-                game_row(&mut out, "NVAPI", &facts.nvapi.verdict);
-            }
-        }
-        Err(error) => {
-            game_row(
-                &mut out,
-                "search",
-                &format!("installation could not be read: {error}"),
-            );
-            game_row(
-                &mut out,
-                "renderer",
-                "not determined statically: installation unreadable",
-            );
-            game_row(&mut out, "NVAPI", &facts.nvapi.verdict);
-        }
-    }
-    if let Some(script) = &facts.nvapi.script {
-        game_row(&mut out, "Proton script", &display_path(script));
-    }
-    game_row(
-        &mut out,
-        "policy scope",
-        "NVAPI is a static Proton policy finding, not confirmation of runtime use.",
-    );
-    out
-}
-
 fn compact_install_path(install: &Path, library: &Path) -> String {
     if install.is_absolute()
         && library.is_absolute()
@@ -982,67 +891,6 @@ fn compact_install_path(install: &Path, library: &Path) -> String {
         }
     }
     display_path(install)
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-fn compact_entry(game: &Game, library: &Path, facts: &dxray_core::inspect::Inspection) -> String {
-    let mut out = format!(
-        "\nEntry: {} | {} {} {} | {}\n",
-        game.name,
-        game.origin.label(),
-        if game.identity.steam_appid().is_some() {
-            "AppID"
-        } else {
-            "ID"
-        },
-        game.identity,
-        compact_install_path(&game.install_dir, library),
-    );
-
-    match &facts.survey {
-        Ok(survey) => {
-            if let Some(best) = survey.best() {
-                let record = crate::record::Record::read(&best.path);
-                if record.error.is_some() {
-                    out.push_str("  renderer: evidence unavailable (executable unreadable)\n");
-                } else {
-                    let _ = write!(
-                        out,
-                        "  renderer: {} (static evidence)",
-                        record.verdict.headline()
-                    );
-                    if !record.verdict.features.is_empty() {
-                        let names: Vec<_> = record
-                            .verdict
-                            .features
-                            .iter()
-                            .map(|feature| feature.name.as_str())
-                            .collect();
-                        let _ = write!(out, " | features: {}", names.join(", "));
-                    }
-                    out.push('\n');
-                }
-            } else {
-                out.push_str("  renderer: not determined statically (no executable found)\n");
-            }
-
-            let mut caveats = Vec::new();
-            if !survey.has_evidence() {
-                caveats.push("no static game evidence");
-            }
-            if survey.is_incomplete() {
-                caveats.push("not searched in full");
-            }
-            if !caveats.is_empty() {
-                let _ = writeln!(out, "  caveat: {}", caveats.join("; "));
-            }
-        }
-        Err(_) => {
-            out.push_str("  renderer: evidence unavailable (installation could not be read)\n");
-        }
-    }
-    out
 }
 
 fn tree_entry(
@@ -1380,20 +1228,6 @@ fn push_place(out: &mut String, install: Option<&Path>, library: Option<&Path>) 
     push_optional(out, "library", library.map(display_path).as_deref());
     out.push(',');
 }
-
-/// One labelled row under a game, wrapped under the label.
-#[cfg(test)]
-#[allow(dead_code)]
-fn game_row(out: &mut String, label: &str, value: &str) {
-    let _ = write!(out, "    {:<8} {label:<7} ", "");
-    crate::wrap::prose(out, GAME_INDENT, GAME_INDENT, value);
-}
-
-/// Where a game's own rows start: four spaces, the eight-wide identity column,
-/// a space, and a seven-wide label.
-#[cfg(test)]
-#[allow(dead_code)]
-const GAME_INDENT: usize = 4 + 8 + 1 + 7 + 1;
 
 /// The message for a machine where none of `launchers` was found.
 ///

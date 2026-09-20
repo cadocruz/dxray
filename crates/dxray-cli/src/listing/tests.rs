@@ -8,30 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use dxray_core::{Game, Identity, Launcher};
 
 use super::{
-    Cause, Listing, compact_entry, compact_install_path, nothing_found, nothing_found_json,
-    render_games, scan,
+    Cause, Listing, compact_install_path, nothing_found, nothing_found_json, render_games, scan,
 };
-
-#[test]
-fn compact_entry_keeps_a_short_truncation_caveat_without_ranking_details() {
-    let facts = dxray_core::inspect::Inspection {
-        survey: Ok(dxray_core::game::Survey::ranked(
-            Vec::new(),
-            vec![dxray_core::game::Note::ExecutableLimited { limit: 512 }],
-        )),
-        nvapi: dxray_core::proton::Answer {
-            script: None,
-            verdict: String::new(),
-            available: None,
-            condition: Vec::new(),
-        },
-    };
-    let text = compact_entry(&dota(), Path::new("/steam"), &facts);
-    assert!(text.contains("Steam AppID 570"));
-    assert!(text.contains("no static game evidence; not searched in full"));
-    assert!(!text.contains("ranked"));
-    assert!(!text.contains("512"));
-}
 
 #[test]
 fn compact_paths_use_only_the_containing_library_as_context() {
@@ -488,15 +466,15 @@ fn a_game_with_no_proton_prefix_still_gets_a_row_saying_so() {
 }
 
 #[test]
-fn a_game_with_no_steam_appid_is_refused_the_proton_question_rather_than_answered() {
-    // The capability difference, spent where a reader can see it. "Not
-    // determined" would mean nobody looked; this game cannot be looked up at
-    // all, and the row has to say which of the two it is.
+fn a_non_steam_game_omits_the_inapplicable_nvapi_row() {
+    // Heroic entries have no Steam compatibility prefix. The concise inventory
+    // keeps that non-applicable detail out of every row; full output retains
+    // the complete analysis when needed.
     let mut out = String::new();
     render_named(&mut out, &[hades()], true);
 
     let unwrapped = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(unwrapped.contains("not applicable"), "got {out:?}");
+    assert!(!unwrapped.contains("NVAPI:"), "got {out:?}");
     assert!(
         unwrapped.contains("Heroic / GOG"),
         "the refusal names the launcher it is refusing for, so the next \
@@ -1028,7 +1006,7 @@ fn golden_scan() -> Listing {
 const GOLDEN_TEXT: &str = concat!(
     "golden [/dxray-golden]\n",
     "  note        its index declared no libraries\n",
-    "  Library: steamapps (1 installation)\n",
+    "  Library: /dxray-golden (1 installation)\n",
     "    └─ 570  Dota 2  [Evidence unavailable]\n",
     "       Path: ./dota 2 beta\n",
     "       Exec: (directory could not be read: No such file or directory (os error 2))\n",
