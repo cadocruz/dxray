@@ -1,0 +1,60 @@
+name: Bug report
+description: Report an incorrect static analysis or launcher discovery result.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        dxray reads local files only. Do not attach proprietary executables,
+        Proton prefixes, complete launcher configuration, tokens, or personal paths.
+        Replace local paths with neutral examples before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: dxray version
+      description: Include the output of `dxray --version` or `dxray-tui --version`.
+      placeholder: dxray 0.0.1
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - CLI inspection (`inspect` or `game`)
+        - Library discovery (`installed` or `steam`)
+        - Proton NVAPI policy
+        - Terminal browser (`dxray-tui`)
+        - Documentation or installation
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Linux distribution and desktop environment
+      placeholder: Fedora 42, KDE Plasma
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and exit code
+      description: Include the exact command after replacing personal paths.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Paste relevant sanitized text or JSON output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result and evidence
+      description: Explain what static evidence supports the expected result. Runtime behavior alone is not enough.
+    validations:
+      required: true
