@@ -67,6 +67,8 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
             if view == "full" {
                 assert!(text.contains("ranked"));
                 assert!(text.contains("launcher root"));
+            } else {
+                assert_compact_inventory(text, stdout_of(&legacy), command);
             }
             let conflict = dxray_with_home(home.path(), [command, "--view", view, "--json"]);
             assert_eq!(conflict.status.code(), Some(2));
@@ -82,6 +84,39 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
             json.stdout
         );
     }
+}
+
+fn assert_compact_inventory(text: &str, legacy: &str, command: &str) {
+    assert!(text.lines().count() < legacy.lines().count());
+    for full_only in [
+        "launcher root",
+        "ranked",
+        "graphics  ",
+        "version   ",
+        "imports   ",
+    ] {
+        assert!(!text.contains(full_only), "unexpected {full_only}: {text}");
+    }
+    let entries: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("Entry: Hades"))
+        .collect();
+    assert_eq!(entries.len(), if command == "installed" { 2 } else { 1 });
+    assert!(
+        entries
+            .iter()
+            .any(|line| line.contains("Steam AppID 570") && line.contains("dota 2 beta"))
+    );
+    if command == "installed" {
+        assert!(entries.iter().any(|line| {
+            line.contains("Heroic / GOG ID 1207658691") && line.contains("Games/Hades")
+        }));
+        assert!(text.contains("note"));
+    }
+    assert!(
+        text.contains("Static evidence only; runtime use and compatibility are not established.")
+    );
+    assert!(text.contains("unreadable"));
 }
 
 use common::{Image, TempDir, dxray_with_home, stderr_of, stdout_of};
@@ -104,6 +139,12 @@ fn inventory_views_distinguish_empty_and_unavailable_installs() {
             assert!(text.contains("Proton Experimental"));
             assert!(text.contains("Dota 2"));
             assert!(text.contains("not determined statically"));
+            if view == "compact" {
+                assert!(text.contains("no static game evidence"));
+                assert!(text.contains("evidence unavailable"));
+                assert!(!text.contains("Tools & Runtimes"));
+                assert!(!text.contains("tool/runtime"));
+            }
         }
     }
 }

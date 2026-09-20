@@ -553,6 +553,9 @@ pub fn scan_with_view(
     // caller with no cancellation has to write — there is no flag to pass and
     // no `Option` to unwrap, which is why the traversal takes neither.
     let _ = dxray_core::walk(launchers, &mut render);
+    if presentation == crate::report::Presentation::Compact {
+        render.listing.text.push_str("Static evidence only; runtime use and compatibility are not established. Unknown renderers may load dynamically.\n");
+    }
     render.listing
 }
 
@@ -978,6 +981,9 @@ fn inventory_entry(
     presentation: crate::report::Presentation,
 ) -> String {
     use crate::report::Presentation;
+    if presentation == Presentation::Compact {
+        return compact_entry(game, facts);
+    }
     let mut out = format!("\nEntry: {}\n", game.name);
     game_row(&mut out, "origin", game.origin.label());
     game_row(&mut out, "identity", &game.identity.to_string());
@@ -1054,6 +1060,65 @@ fn inventory_entry(
         "policy scope",
         "NVAPI is a static Proton policy finding, not confirmation of runtime use.",
     );
+    out
+}
+
+fn compact_entry(game: &Game, facts: &dxray_core::inspect::Inspection) -> String {
+    let mut out = format!(
+        "\nEntry: {} | {} {} {} | {}\n",
+        game.name,
+        game.origin.label(),
+        if game.identity.steam_appid().is_some() {
+            "AppID"
+        } else {
+            "ID"
+        },
+        game.identity,
+        game.install_dir.display(),
+    );
+
+    match &facts.survey {
+        Ok(survey) => {
+            if let Some(best) = survey.best() {
+                let record = crate::record::Record::read(&best.path);
+                if record.error.is_some() {
+                    out.push_str("  renderer: evidence unavailable (executable unreadable)\n");
+                } else {
+                    let _ = write!(
+                        out,
+                        "  renderer: {} (static evidence)",
+                        record.verdict.headline()
+                    );
+                    if !record.verdict.features.is_empty() {
+                        let names: Vec<_> = record
+                            .verdict
+                            .features
+                            .iter()
+                            .map(|feature| feature.name.as_str())
+                            .collect();
+                        let _ = write!(out, " | features: {}", names.join(", "));
+                    }
+                    out.push('\n');
+                }
+            } else {
+                out.push_str("  renderer: not determined statically (no executable found)\n");
+            }
+
+            let mut caveats = Vec::new();
+            if !survey.has_evidence() {
+                caveats.push("no static game evidence");
+            }
+            if survey.is_incomplete() {
+                caveats.push("not searched in full");
+            }
+            if !caveats.is_empty() {
+                let _ = writeln!(out, "  caveat: {}", caveats.join("; "));
+            }
+        }
+        Err(_) => {
+            out.push_str("  renderer: evidence unavailable (installation could not be read)\n");
+        }
+    }
     out
 }
 

@@ -7,7 +7,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dxray_core::{Game, Identity, Launcher};
 
-use super::{Cause, Listing, nothing_found, nothing_found_json, render_games, scan};
+use super::{Cause, Listing, compact_entry, nothing_found, nothing_found_json, render_games, scan};
+
+#[test]
+fn compact_entry_keeps_a_short_truncation_caveat_without_ranking_details() {
+    let facts = dxray_core::inspect::Inspection {
+        survey: Ok(dxray_core::game::Survey::ranked(
+            Vec::new(),
+            vec![dxray_core::game::Note::ExecutableLimited { limit: 512 }],
+        )),
+        nvapi: dxray_core::proton::Answer {
+            script: None,
+            verdict: String::new(),
+            available: None,
+            condition: Vec::new(),
+        },
+    };
+    let text = compact_entry(&dota(), &facts);
+    assert!(text.contains("Steam AppID 570"));
+    assert!(text.contains("no static game evidence; not searched in full"));
+    assert!(!text.contains("ranked"));
+    assert!(!text.contains("512"));
+}
 
 fn listing(games: usize, problems: usize) -> Listing {
     Listing {
