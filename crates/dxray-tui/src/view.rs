@@ -535,7 +535,7 @@ fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
                 ))];
             }
             vec![
-                Line::from("Selected entry:").style(Modifier::BOLD),
+                Line::from("Identity / origin:").style(Modifier::BOLD),
                 Line::from(if app.filter.is_empty() {
                     "Waiting for a game to be discovered."
                 } else {
@@ -549,13 +549,24 @@ fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
             }
             vec![
                 Line::from(clip_text(
-                    &format!("Selected entry: {} ({})", entry.name, entry.id_label()),
+                    &format!(
+                        "Identity / origin: {} ({}) · {}",
+                        entry.name,
+                        entry.id_label(),
+                        entry.origin.label()
+                    ),
                     width,
-                )),
+                ))
+                .style(Modifier::BOLD),
                 Line::from(clip_text(
                     &format!("Renderer (static): {}", entry.headline()),
                     width,
-                )),
+                ))
+                .style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]
         },
     )
@@ -627,7 +638,78 @@ fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("ID: {}", entry.id_label())),
         Line::from(format!("Source: {}", entry.origin.label())),
+        Line::from(""),
     ];
+    lines.push(
+        Line::from(if expanded {
+            "Evidence details [expanded]"
+        } else {
+            "Evidence details [collapsed]"
+        })
+        .style(Modifier::BOLD),
+    );
+    if expanded && let Best::Ranked(ranked) = &entry.best {
+        render_verdict(&mut lines, ranked);
+    }
+
+    render_nvapi_policy(&mut lines, entry, expanded);
+    if expanded {
+        render_paths_and_ranking(&mut lines, entry);
+    }
+    render_advanced_diagnostics(&mut lines, entry);
+    lines
+}
+
+fn render_nvapi_policy(lines: &mut Vec<Line<'static>>, entry: &Entry, expanded: bool) {
+    lines.push(Line::from(""));
+    lines.push(section_title("Proton / NVAPI"));
+    lines.push(Line::from(format!("NVAPI: {}", entry.nvapi.verdict)));
+    lines.push(muted_line("Policy does not establish runtime enablement."));
+    if !expanded {
+        return;
+    }
+    if let Some(script) = &entry.nvapi.script {
+        lines.push(Line::from(format!("Proton script: {}", script.display())));
+    }
+    if !entry.nvapi.condition.is_empty() {
+        lines.push(Line::from("NVAPI condition:"));
+        lines.extend(
+            entry
+                .nvapi
+                .condition
+                .iter()
+                .map(|line| Line::from(format!("  {line}"))),
+        );
+    }
+}
+
+fn render_paths_and_ranking(lines: &mut Vec<Line<'static>>, entry: &Entry) {
+    lines.push(Line::from(""));
+    lines.push(section_title("Paths / ranking"));
+    lines.push(Line::from(format!(
+        "Install: {}",
+        entry.install_dir.display()
+    )));
+    lines.push(Line::from(format!("Library: {}", entry.library.display())));
+    if let Best::Ranked(ranked) = &entry.best {
+        lines.push(Line::from(format!(
+            "Executable: {} (score {}, {} candidates)",
+            ranked.path.display(),
+            ranked.score,
+            ranked.of
+        )));
+        lines.extend(
+            ranked
+                .reasons
+                .iter()
+                .map(|reason| Line::from(format!("• {reason}"))),
+        );
+    }
+}
+
+fn render_advanced_diagnostics(lines: &mut Vec<Line<'static>>, entry: &Entry) {
+    lines.push(Line::from(""));
+    lines.push(section_title("Advanced diagnostics"));
     let qualifications = caveats(entry);
     if !qualifications.is_empty() {
         lines.push(Line::from(format!("Analysis:{qualifications}")));
@@ -642,27 +724,25 @@ fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
             if let Ok(verdict) = &ranked.verdict
                 && verdict.renderers.is_empty()
             {
-                lines.push(Line::from("Renderer unknown from static evidence."));
+                lines.push(muted_line("Renderer unknown from static evidence."));
             }
             match &ranked.verdict {
-                Ok(verdict) if verdict.is_empty() => lines.push(Line::from(
+                Ok(verdict) if verdict.is_empty() => lines.push(muted_line(
                     "Evidence: executable read; no recognised graphics findings.",
                 )),
-                Err(error) => lines.push(Line::from(format!(
+                Err(error) => lines.push(error_line(format!(
                     "Evidence unavailable: could not read executable: {error}"
                 ))),
                 Ok(_) => {}
             }
         }
-        Best::NoExecutable => lines.push(Line::from("No executable was found in this install.")),
+        Best::NoExecutable => {
+            lines.push(muted_line("No executable was found in this install."));
+        }
         Best::Unwalkable(error) => {
-            lines.push(Line::from(format!("Could not read install: {error}")));
+            lines.push(error_line(format!("Could not read install: {error}")));
         }
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from("Proton / NVAPI — static policy:"));
-    lines.push(Line::from(format!("NVAPI: {}", entry.nvapi.verdict)));
-    lines.push(Line::from("Policy does not establish runtime enablement."));
     if !entry.notes.is_empty() {
         lines.push(Line::from("Entry notes:").style(Modifier::BOLD));
         lines.extend(
@@ -672,53 +752,22 @@ fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
                 .map(|note| Line::from(format!("Note: {note}"))),
         );
     }
-    lines.push(
-        Line::from(if expanded {
-            "Evidence details [expanded]"
-        } else {
-            "Evidence details [collapsed]"
-        })
-        .style(Modifier::BOLD),
-    );
-    if !expanded {
-        return lines;
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from("Paths and selection evidence:"));
-    lines.push(Line::from(format!(
-        "Install: {}",
-        entry.install_dir.display()
-    )));
-    lines.push(Line::from(format!("Library: {}", entry.library.display())));
-    if let Some(script) = &entry.nvapi.script {
-        lines.push(Line::from(format!("Proton script: {}", script.display())));
-    }
-    if let Best::Ranked(ranked) = &entry.best {
-        render_verdict(&mut lines, ranked);
-        lines.push(Line::from(format!(
-            "Executable: {} (score {}, {} candidates)",
-            ranked.path.display(),
-            ranked.score,
-            ranked.of
-        )));
-        lines.extend(
-            ranked
-                .reasons
-                .iter()
-                .map(|reason| Line::from(format!("• {reason}"))),
-        );
-    }
-    if !entry.nvapi.condition.is_empty() {
-        lines.push(Line::from("NVAPI condition:"));
-        lines.extend(
-            entry
-                .nvapi
-                .condition
-                .iter()
-                .map(|line| Line::from(format!("  {line}"))),
-        );
-    }
-    lines
+}
+
+fn section_title(title: &'static str) -> Line<'static> {
+    Line::from(title).style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn muted_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(text.into()).style(Color::Gray)
+}
+
+fn error_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(text.into()).style(Color::Red)
 }
 
 /// Adds the evidence read from the selected executable without interpreting it
@@ -731,15 +780,17 @@ fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
     if verdict.is_empty() {
         return;
     }
-    lines.push(Line::from("Evidence:"));
-    lines.push(Line::from(
+    lines.push(Line::from(""));
+    lines.push(section_title("Renderer evidence"));
+    lines.push(muted_line(
         "Imports do not prove the renderer used at runtime.",
     ));
     render_findings(lines, "Renderers", &verdict.renderers);
     render_findings(lines, "Infrastructure", &verdict.infrastructure);
     lines.push(Line::from(""));
+    lines.push(section_title("Features / upscalers"));
     render_findings(lines, "Features", &verdict.features);
-    lines.push(Line::from(
+    lines.push(muted_line(
         "DLL presence does not prove a feature is enabled.",
     ));
     render_findings(lines, "Local overrides", &verdict.local_overrides);
@@ -822,7 +873,7 @@ mod tests {
             );
             app.update(Msg::Resize(width, 30));
             app.update(Msg::Key(Key::Home));
-            assert!(draw(&app, width, 30).contains("Selected entry:"));
+            assert!(draw(&app, width, 30).contains("Identity / origin:"));
         }
     }
 
@@ -1366,7 +1417,7 @@ mod tests {
             app.update(Msg::Resize(width, 60));
             app.focus = crate::app::Focus::Detail;
             let screen = draw(&app, width, 60);
-            let selected = screen.find("Selected entry:").unwrap();
+            let selected = screen.find("Identity / origin:").unwrap();
             let notes = screen.find("Entry notes:").unwrap();
             let local = screen.find("Note: selection remains uncertain").unwrap();
             let scan = screen.find("Scan diagnostics:").unwrap();
@@ -1384,7 +1435,7 @@ mod tests {
         let mut app = App::new(50);
         app.update(Msg::Game(Box::new(game())));
         let screen = draw(&app, 180, 50);
-        assert!(screen.contains("Selected entry:"));
+        assert!(screen.contains("Identity / origin:"));
         assert!(!screen.contains("Entry notes:"));
         assert!(!screen.contains("Scan diagnostics:"));
         assert!(screen.contains("Problems: 0  Notes: 0"));
@@ -1409,7 +1460,7 @@ mod tests {
             assert!(screen.contains("Note: scan note"), "{screen}");
             assert_eq!(app.selected, selected);
             app.update(Msg::Key(crate::key::Key::Home));
-            assert!(draw(&app, width, 30).contains("Selected entry:"));
+            assert!(draw(&app, width, 30).contains("Identity / origin:"));
         }
     }
 
@@ -1463,22 +1514,51 @@ mod tests {
             .condition
             .push("original condition evidence".into());
         let mut app = App::new(80);
-        app.update(Msg::Resize(200, 80));
+        app.update(Msg::Resize(180, 80));
         app.update(Msg::Game(Box::new(entry)));
+        let collapsed = draw(&app, 180, 80);
+        for title in [
+            "Identity / origin:",
+            "Renderer (static):",
+            "Proton / NVAPI",
+            "Advanced diagnostics",
+        ] {
+            assert_eq!(
+                collapsed.matches(title).count(),
+                1,
+                "missing or duplicated collapsed title {title}:\n{collapsed}"
+            );
+        }
+        for expanded_only in [
+            "Renderer evidence",
+            "Features / upscalers",
+            "Paths / ranking",
+            "nvngx_dlss.dll (neighbour)",
+        ] {
+            assert!(
+                !collapsed.contains(expanded_only),
+                "expanded evidence leaked into collapsed details: {expanded_only}:\n{collapsed}"
+            );
+        }
+
         app.evidence_expanded = true;
-        let screen = draw(&app, 200, 80);
+        let screen = draw(&app, 180, 80);
         let mut previous = 0;
         for section in [
+            "Identity / origin:",
             "Team Fortress 2 (440)",
             "Renderer (static):",
-            "Source: Steam",
-            "Proton / NVAPI — static policy:",
-            "Note: selection remains uncertain",
-            "Paths and selection evidence:",
+            "Renderer evidence",
             "Renderers:",
+            "Infrastructure:",
+            "Features / upscalers",
             "Features:",
-            "Executable:",
+            "Proton / NVAPI",
             "NVAPI condition:",
+            "Paths / ranking",
+            "Executable:",
+            "Advanced diagnostics",
+            "Note: selection remains uncertain",
         ] {
             let position = screen
                 .find(section)
@@ -1497,14 +1577,26 @@ mod tests {
             "shipping executable",
             "original condition evidence",
         ] {
-            assert!(screen.contains(evidence), "missing {evidence}:\n{screen}");
+            assert_eq!(
+                screen.matches(evidence).count(),
+                1,
+                "missing or duplicated {evidence}:\n{screen}"
+            );
         }
-        for evidence in [
-            "nvngx_dlss.dll (neighbour)",
-            "libxess.dll (neighbour)",
-            "sl.interposer.dll (neighbour)",
+        for title in [
+            "Identity / origin:",
+            "Renderer (static):",
+            "Renderer evidence",
+            "Features / upscalers",
+            "Proton / NVAPI",
+            "Paths / ranking",
+            "Advanced diagnostics",
         ] {
-            assert_eq!(screen.matches(evidence).count(), 1, "duplicated {evidence}");
+            assert_eq!(
+                screen.matches(title).count(),
+                1,
+                "duplicated title {title}:\n{screen}"
+            );
         }
     }
 
@@ -1786,7 +1878,10 @@ mod tests {
             app.update(Msg::Key(crate::Key::Tab));
 
             let first = draw(&app, width, 13);
-            assert!(first.contains("Selected entry: Team"), "{width}:\n{first}");
+            assert!(
+                first.contains("Identity / origin: Team"),
+                "{width}:\n{first}"
+            );
             assert!(
                 first.contains("Renderer (static): Direct3D 12"),
                 "{width}:\n{first}"
@@ -1795,7 +1890,7 @@ mod tests {
 
             app.update(Msg::Key(crate::Key::End));
             let last = draw(&app, width, 13);
-            assert!(last.contains("Selected entry: Team"), "{width}:\n{last}");
+            assert!(last.contains("Identity / origin: Team"), "{width}:\n{last}");
             assert!(
                 last.contains("Renderer (static): Direct3D 12"),
                 "{width}:\n{last}"
