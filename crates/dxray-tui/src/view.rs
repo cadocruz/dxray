@@ -5,7 +5,6 @@ use std::fmt::Write as _;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
-use ratatui_bubbletea_components::{ListItem, SelectList};
 use ratatui_bubbletea_theme::{BubbleTheme, Palette, Symbols};
 
 use crate::app::{App, Focus, ScanMessage};
@@ -326,65 +325,132 @@ fn render_list(
         );
         return;
     }
-    let items = entries.iter().map(|entry| {
-        if terminal_width < crate::layout::SPLIT_WIDTH {
-            compact_list_item(entry, usize::from(inner.width))
-        } else {
-            ListItem::new(entry.name.clone()).description(format!(
-                "{} · {}{} · {}",
-                entry.origin.label(),
-                entry.id_label(),
-                caveats(entry),
-                entry.headline()
-            ))
+    let tabular = terminal_width >= crate::layout::SPLIT_WIDTH;
+    let selected_position = app.selected_position();
+    let boundary = app.evidence_group_len();
+    let no_evidence = app.no_evidence_len();
+    let mut lines = Vec::new();
+    if tabular {
+        lines.push(table_line(
+            "Name",
+            "Library",
+            "Static result",
+            usize::from(inner.width),
+            theme.title,
+            false,
+        ));
+    }
+    for (visible_index, entry) in entries.into_iter().enumerate() {
+        let position = app.offset + visible_index;
+        if no_evidence > 0 && (position == boundary || (visible_index == 0 && position > boundary))
+        {
+            lines.push(
+                Line::from(clip_text(
+                    &format!("No game evidence ({no_evidence})"),
+                    usize::from(inner.width),
+                ))
+                .style(theme.muted.add_modifier(Modifier::BOLD)),
+            );
         }
-    });
-    let mut list = SelectList::new(items).theme(*theme);
-    list.select(
-        app.selected_position()
-            .and_then(|selected| selected.checked_sub(app.offset)),
-    );
-    render_if_visible(frame, &list, inner);
+        let is_selected = selected_position == Some(position);
+        lines.push(if tabular {
+            table_line(
+                &entry.name,
+                library_label(entry, true, usize::from(inner.width)),
+                &static_result(entry),
+                usize::from(inner.width),
+                theme.text,
+                is_selected,
+            )
+        } else {
+            compact_list_line(entry, usize::from(inner.width), theme.text, is_selected)
+        });
+    }
+    render_if_visible(frame, Paragraph::new(lines), inner);
 }
 
-fn compact_list_item(entry: &Entry, width: usize) -> ListItem {
-    // SelectList adds a two-cell marker and a three-cell separator.
-    let available = width.saturating_sub(5);
-    let name_floor = available.min(if width < 40 { 3 } else { 4 });
-    let description_budget = available.saturating_sub(name_floor);
-    let full_status = match entry.carries_evidence {
-        Some(true) => "static evidence found",
-        Some(false) => "no static game evidence",
-        None => "evidence unavailable",
-    };
-    let short_status = match entry.carries_evidence {
-        Some(true) => "static",
-        Some(false) => "no static",
-        None => "unavailable",
-    };
-    let id = entry.id_label();
-    let mut origin = entry.origin.label();
-    if width < 60 {
-        origin = origin.split(" / ").next().unwrap_or(origin);
-    }
-    let mut status = if width >= 60 {
-        full_status
+fn table_line(
+    name: &str,
+    library: &str,
+    result: &str,
+    width: usize,
+    style: Style,
+    selected: bool,
+) -> Line<'static> {
+    let marker = if selected { "› " } else { "  " };
+    let separators = 6;
+    let columns = width.saturating_sub(text_width(marker) + separators);
+    let library_width = if width >= 72 { 14 } else { 7 }.min(columns);
+    let result_width = if width >= 72 { 24 } else { 17 }.min(columns.saturating_sub(library_width));
+    let name_width = columns.saturating_sub(library_width + result_width);
+    let text = format!(
+        "{marker}{} │ {} │ {}",
+        padded_cell(name, name_width),
+        padded_cell(library, library_width),
+        padded_cell(result, result_width),
+    );
+    Line::from(text).style(if selected {
+        style.add_modifier(Modifier::REVERSED)
     } else {
-        short_status
+        style
+    })
+}
+
+fn padded_cell(text: &str, width: usize) -> String {
+    let text = clip_text(text, width);
+    format!(
+        "{text}{}",
+        " ".repeat(width.saturating_sub(text_width(&text)))
+    )
+}
+
+fn compact_list_line(entry: &Entry, width: usize, style: Style, selected: bool) -> Line<'static> {
+    let marker = match (selected, width < 40) {
+        (true, true) => "›",
+        (false, true) => " ",
+        (true, false) => "› ",
+        (false, false) => "  ",
     };
-    if text_width(origin) + text_width(&id) + text_width(status) + 2 > description_budget {
-        status = short_status;
+    let separator = if width < 40 { " " } else { " · " };
+    let available = width.saturating_sub(text_width(marker));
+    let result = static_result(entry);
+    let library = library_label(entry, false, width);
+    let fixed = text_width(library) + text_width(&result) + 2 * text_width(separator);
+    let name_width = available.saturating_sub(fixed).max(1).min(available);
+    let name = clip_text(&entry.name, name_width);
+    let mut text = format!("{marker}{name}{separator}{library}{separator}{result}");
+    text = clip_text(&text, width);
+    Line::from(text).style(if selected {
+        style.add_modifier(Modifier::REVERSED)
+    } else {
+        style
+    })
+}
+
+fn library_label(entry: &Entry, tabular: bool, width: usize) -> &str {
+    let label = entry.origin.label();
+    if label == "Steam" || (tabular && width >= 72) {
+        label
+    } else {
+        label.split(" / ").next().unwrap_or(label)
     }
-    if text_width(origin) + text_width(status) + 3 > description_budget {
-        origin = origin.split(" / ").next().unwrap_or(origin);
+}
+
+fn static_result(entry: &Entry) -> String {
+    match &entry.best {
+        Best::Unwalkable(_) => "not searched".to_owned(),
+        Best::NoExecutable => "no executable".to_owned(),
+        Best::Ranked(ranked) => match &ranked.verdict {
+            Err(_) => "not searched".to_owned(),
+            Ok(verdict) if verdict.renderers.is_empty() => "no API determined".to_owned(),
+            Ok(verdict) => verdict
+                .renderers
+                .iter()
+                .map(|finding| finding.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / "),
+        },
     }
-    let origin_budget = description_budget.saturating_sub(text_width(status) + 3);
-    let origin = clip_text(origin, origin_budget);
-    let id_budget = description_budget.saturating_sub(text_width(&origin) + text_width(status) + 2);
-    let id = clip_text(&id, id_budget);
-    let description = format!("{origin} {id} {status}");
-    let name_budget = available.saturating_sub(text_width(&description));
-    ListItem::new(clip_text(&entry.name, name_budget)).description(description)
 }
 
 fn text_width(text: &str) -> usize {
@@ -892,10 +958,14 @@ mod tests {
         app.update(Msg::Key(Key::Enter));
         assert!(!draw(&app, 180, 50).contains("Install:"));
     }
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        style::{Modifier, Style},
+    };
     use ratatui_tea::Model;
 
-    use super::{compact_list_item, render, text_width};
+    use super::{compact_list_line, render, text_width};
     use crate::{
         Msg,
         app::App,
@@ -952,34 +1022,46 @@ mod tests {
     }
 
     #[test]
-    fn list_uses_entries_and_reports_survey_evidence_without_categories() {
-        for (evidence, status) in [
-            (Some(true), "static evidence found"),
-            (Some(false), "no static game evidence"),
-            (None, "evidence unavailable"),
+    fn list_uses_factual_static_results_without_ids() {
+        for (evidence, best, status) in [
+            (Some(true), Best::NoExecutable, "no executable"),
+            (
+                Some(false),
+                Best::Ranked(Box::new(Ranked {
+                    path: PathBuf::from("game.exe"),
+                    score: 0,
+                    reasons: Vec::new(),
+                    of: 1,
+                    verdict: Ok(dxray_core::analysis::Verdict::default()),
+                })),
+                "no API determined",
+            ),
+            (
+                None,
+                Best::Unwalkable("directory is absent".into()),
+                "not searched",
+            ),
         ] {
             let mut entry = game();
             entry.name = "Example".into();
             entry.carries_evidence = evidence;
-            if evidence.is_none() {
-                entry.best = Best::Unwalkable("directory is absent".into());
-            }
+            entry.best = best;
             let mut app = App::new(24);
             app.update(Msg::Game(Box::new(entry)));
-            for width in [32, 60, 99, 100, 180, 240] {
+            for width in [32, 60, 80, 99, 100, 180] {
                 app.update(Msg::Resize(width, 24));
                 let selected = app.selected;
                 let screen = draw(&app, width, 24);
                 assert!(screen.contains("Entries (1)"), "{screen}");
-                assert!(!screen.contains("Games ("));
-                assert!(!screen.contains("Tools & Runtimes"));
-                if width >= 180 {
-                    let row = screen
-                        .lines()
-                        .find(|line| line.contains("Example"))
-                        .unwrap();
-                    assert!(row.contains("Steam · 440"), "{row}");
-                    assert!(row.contains(status), "{row}");
+                let row = screen.lines().find(|line| line.contains('›')).unwrap();
+                let row = row.split("││").next().unwrap_or(row);
+                assert!(row.contains(status), "{width}: {row}");
+                assert!(!row.contains("440"), "{width}: {row}");
+                assert!(!row.contains("static evidence found"), "{width}: {row}");
+                if width >= 100 {
+                    for heading in ["Name", "Library", "Static result"] {
+                        assert!(screen.contains(heading), "{width}: {screen}");
+                    }
                 }
                 app.filter = "example".into();
                 let screen = draw(&app, width, 24);
@@ -995,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_list_keeps_steam_identity_and_static_status_visible() {
+    fn responsive_list_keeps_name_library_and_result_visible() {
         let mut entry = game();
         entry.name = "Marvel's Guardians of the Galaxy".into();
         entry.identity = dxray_core::Identity::SteamApp(1_088_850);
@@ -1006,24 +1088,16 @@ mod tests {
         for width in [32, 60, 80, 99, 100, 180] {
             app.update(Msg::Resize(width, 24));
             let screen = draw(&app, width, 24);
-            let row = screen.lines().find(|line| line.contains("Steam")).unwrap();
-            if width < 100 {
-                assert!(row.contains("1088850"), "{width}: {row}");
-                assert!(row.contains('M'), "{width}: {row}");
-                assert!(row.contains("static"), "{width}: {row}");
-            }
-            if (80..100).contains(&width) {
-                assert!(
-                    row.contains("Marvel's Guardians of the Galaxy"),
-                    "{width}: {row}"
-                );
-                assert!(row.contains("static evidence found"), "{width}: {row}");
-            }
+            let row = screen.lines().find(|line| line.contains('›')).unwrap();
+            let row = row.split("││").next().unwrap_or(row);
+            assert!(row.contains('M'), "{width}: {row}");
+            assert!(row.contains("no executable"), "{width}: {row}");
+            assert!(!row.contains("1088850"), "{width}: {row}");
         }
     }
 
     #[test]
-    fn compact_list_handles_long_heroic_ids_and_unicode() {
+    fn list_clips_unicode_names_and_shortens_heroic_library() {
         let mut entry = game();
         entry.name = "Étoile 銀河 — a very long title".into();
         entry.origin = dxray_core::heroic::Store::Epic.origin();
@@ -1035,49 +1109,33 @@ mod tests {
         for width in [32, 60, 80, 99, 100, 180] {
             app.update(Msg::Resize(width, 24));
             let screen = draw(&app, width, 24);
-            if width < 100 {
-                let row = screen.lines().find(|line| line.contains("Heroic")).unwrap();
-                assert!(row.contains('É'), "{width}: {row}");
-                assert!(row.contains('a'), "{width}: {row}");
-                assert!(row.contains("static"), "{width}: {row}");
-                assert!(row.contains('…') || row.contains("abcdef0123456789abcdef0123456789"));
-                if width >= 80 {
-                    assert!(
-                        row.contains("abcdef0123456789abcdef0123456789"),
-                        "{width}: {row}"
-                    );
-                }
-                if width == 99 {
-                    assert!(row.contains("no static game evidence"), "{width}: {row}");
-                }
-            } else {
-                assert!(screen.contains("Étoile"), "{width}: {screen}");
-            }
+            let row = screen.lines().find(|line| line.contains('›')).unwrap();
+            let row = row.split("││").next().unwrap_or(row);
+            assert!(row.contains('É'), "{width}: {row}");
+            assert!(row.contains("no executable"), "{width}: {row}");
+            assert!(!row.contains("abcdef"), "{width}: {row}");
+            assert_eq!(
+                row.contains("Heroic / Epic"),
+                width >= 180,
+                "{width}: {row}"
+            );
         }
     }
 
     #[test]
-    fn compact_list_item_fits_unicode_cells_and_keeps_status() {
+    fn compact_list_line_fits_unicode_cell_budget() {
         let mut entry = game();
         entry.name = "銀河 Étoile".repeat(20);
         entry.origin = dxray_core::heroic::Store::Epic.origin();
         entry.identity = dxray_core::Identity::Native("id0123456789".repeat(8));
-        for (evidence, marker) in [
-            (Some(true), "static"),
-            (Some(false), "no static"),
-            (None, "unavailable"),
-        ] {
-            entry.carries_evidence = evidence;
-            for width in [32_u16, 60, 80, 99] {
-                let item = compact_list_item(&entry, usize::from(width - 2));
-                let description = item.description_text().unwrap();
-                let drawn_width = 5 + text_width(item.label()) + text_width(description);
-                assert!(drawn_width <= usize::from(width - 2), "{width}: {item:?}");
-                assert!(!item.label().is_empty(), "{width}: {item:?}");
-                assert!(description.contains("Heroic"), "{width}: {item:?}");
-                assert!(description.contains(marker), "{width}: {item:?}");
-                assert!(description.contains("id"), "{width}: {item:?}");
-            }
+        for width in [30_usize, 58, 78, 97] {
+            let line = compact_list_line(&entry, width, Style::default(), true);
+            let text = line.to_string();
+            assert!(text_width(&text) <= width, "{width}: {text}");
+            assert!(text.contains('銀'), "{width}: {text}");
+            assert!(text.contains("Heroic"), "{width}: {text}");
+            assert!(text.contains("no executable"), "{width}: {text}");
+            assert!(!text.contains("id012"), "{width}: {text}");
         }
     }
 
@@ -1090,19 +1148,130 @@ mod tests {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(entry)));
         let screen = draw(&app, 400, 24);
-        let row = screen
-            .lines()
-            .find(|line| line.contains("Example"))
-            .unwrap();
-        for text in [
-            "static evidence found",
-            "evidence unavailable",
-            "not searched in full",
-            "executable unreadable",
-        ] {
-            assert!(row.contains(text), "{row}");
+        let row = screen.lines().find(|line| line.contains('›')).unwrap();
+        let row = row.split("││").next().unwrap_or(row);
+        assert!(row.contains("not searched"), "{row}");
+        assert!(!row.contains("static evidence found"), "{row}");
+        assert!(!row.contains("440"), "{row}");
+    }
+
+    #[test]
+    fn no_evidence_section_preserves_order_selection_and_filtering() {
+        let mut game_entry = game();
+        game_entry.name = "Game".into();
+        game_entry.carries_evidence = Some(true);
+        let mut runtime = game();
+        runtime.name = "Run one".into();
+        runtime.carries_evidence = Some(false);
+        let mut proton = game();
+        proton.name = "Run two".into();
+        proton.carries_evidence = Some(false);
+
+        let mut app = App::new(12);
+        app.update(Msg::Game(Box::new(runtime)));
+        app.update(Msg::Game(Box::new(game_entry)));
+        app.update(Msg::Game(Box::new(proton)));
+
+        for width in [32, 60, 80, 99, 100, 180] {
+            app.update(Msg::Resize(width, 12));
+            let screen = draw(&app, width, 12);
+            let game_at = screen.find("Game").unwrap();
+            let section_at = screen.find("No game evidence (2)").unwrap();
+            let runtime_at = screen.rfind("Run").unwrap();
+            assert!(
+                game_at < section_at && section_at < runtime_at,
+                "{width}: {screen}"
+            );
+            if width >= 100 {
+                assert!(screen.contains("Name"));
+                assert!(screen.contains("Library"));
+                assert!(screen.contains("Static result"));
+            }
         }
-        assert!(!row.contains("no static game evidence"));
+
+        app.update(Msg::Key(crate::Key::End));
+        assert_eq!(app.selected_entry().unwrap().name, "Run two");
+        assert!(draw(&app, 100, 12).contains("No game evidence (2)"));
+
+        for character in "run one".chars() {
+            app.update(Msg::Key(crate::Key::Char(character)));
+        }
+        assert_eq!(app.filtered_len(), 1);
+        assert_eq!(app.selected_entry().unwrap().name, "Run one");
+        let filtered = draw(&app, 100, 12);
+        assert!(filtered.contains("No game evidence (1)"));
+        assert!(filtered.contains("Run one"));
+    }
+
+    #[test]
+    fn no_evidence_selection_highlights_its_entry_when_viewport_starts_in_that_group() {
+        let mut app = App::new(12);
+        for name in ["Game one", "Game two"] {
+            let mut entry = game();
+            entry.name = name.into();
+            entry.carries_evidence = Some(true);
+            app.update(Msg::Game(Box::new(entry)));
+        }
+        for name in [
+            "Runtime one",
+            "Runtime two",
+            "Runtime three",
+            "Runtime four",
+            "Runtime five",
+            "Runtime six",
+            "Chosen runtime",
+        ] {
+            let mut entry = game();
+            entry.name = name.into();
+            entry.carries_evidence = Some(false);
+            app.update(Msg::Game(Box::new(entry)));
+        }
+        app.update(Msg::Resize(100, 12));
+        app.update(Msg::Key(crate::Key::End));
+
+        assert_eq!(app.selected_entry().unwrap().name, "Chosen runtime");
+        assert!(
+            app.offset > app.evidence_group_len(),
+            "the viewport must start inside the no-evidence group"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let list = crate::layout::areas(buffer.area).list;
+        let inner_x = list.x + 1;
+        let inner_width = list.width.saturating_sub(2);
+        let rows = (list.y + 1)..list.bottom().saturating_sub(1);
+        let row_text = |y| {
+            (inner_x..inner_x + inner_width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        let table_row = rows
+            .clone()
+            .find(|&y| row_text(y).contains("Static result"))
+            .expect("the table header is visible");
+        let section_row = rows
+            .clone()
+            .find(|&y| row_text(y).contains("No game evidence (7)"))
+            .expect("the group header is repeated above a viewport that starts in the group");
+        let selected_row = rows
+            .clone()
+            .find(|&y| row_text(y).contains("Chosen runtime"))
+            .expect("the selected entry is visible");
+        assert!(table_row < section_row && section_row < selected_row);
+
+        let reversed_rows = rows
+            .filter(|&y| {
+                (inner_x..inner_x + inner_width)
+                    .any(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reversed_rows,
+            [selected_row],
+            "only the selected entry row may carry the selection highlight"
+        );
     }
 
     fn missing_install_entry(kind: io::ErrorKind, message: &str) -> Entry {
@@ -1939,11 +2108,7 @@ mod tests {
     }
 
     #[test]
-    fn an_install_that_argues_nothing_is_marked_in_the_list_and_explained_below_it() {
-        // The row stays. Only the marker and the order say that nothing in this
-        // directory argues it is a game — the word is `no evidence`, because
-        // what was observed is nothing, and calling it a tool is the claim this
-        // project retired.
+    fn an_install_that_argues_nothing_is_grouped_and_explained_in_detail() {
         let mut app = App::new(24);
         let entry = Entry::build(
             Game {
@@ -1976,8 +2141,8 @@ mod tests {
 {screen}"
         );
         assert!(
-            screen.contains("· no static game evidence"),
-            "the marker is drawn in the list column, got:
+            screen.contains("No game evidence (1)"),
+            "the section remains visible, got:
 {screen}"
         );
         assert!(

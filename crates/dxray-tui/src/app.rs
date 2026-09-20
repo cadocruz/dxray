@@ -103,9 +103,58 @@ impl App {
     pub(crate) fn visible_entries(&self) -> Vec<&Entry> {
         self.filtered_indices()
             .skip(self.offset)
-            .take(layout::list_rows(self.width, self.height))
+            .take(self.visible_entry_count_from(self.offset))
             .map(|index| &self.entries[index])
             .collect()
+    }
+
+    pub(crate) fn evidence_group_len(&self) -> usize {
+        self.filtered_indices()
+            .take_while(|&index| !self.entries[index].lacks_evidence())
+            .count()
+    }
+
+    pub(crate) fn no_evidence_len(&self) -> usize {
+        self.filtered_len()
+            .saturating_sub(self.evidence_group_len())
+    }
+
+    fn visible_entry_count_from(&self, offset: usize) -> usize {
+        let length = self.filtered_len();
+        if offset >= length {
+            return 0;
+        }
+        let mut rows = layout::list_rows(self.width, self.height);
+        if self.width >= layout::SPLIT_WIDTH {
+            rows = rows.saturating_sub(1);
+        }
+        let boundary = self.evidence_group_len();
+        let has_section = boundary < length;
+        let mut used = usize::from(has_section && offset >= boundary);
+        let mut count = 0;
+        for position in offset..length {
+            if has_section && position == boundary && position != offset {
+                used = used.saturating_add(1);
+            }
+            if used >= rows {
+                break;
+            }
+            used = used.saturating_add(1);
+            count += 1;
+        }
+        count
+    }
+
+    fn maximum_list_offset(&self) -> usize {
+        let length = self.filtered_len();
+        if length == 0 {
+            return 0;
+        }
+        let mut offset = length - 1;
+        while offset > 0 && self.visible_entry_count_from(offset - 1) > length - offset {
+            offset -= 1;
+        }
+        offset
     }
 
     /// The entries the list shows, in the order it shows them.
@@ -177,14 +226,19 @@ impl App {
             self.offset = 0;
             return;
         };
-        let rows = layout::list_rows(self.width, self.height);
         if selected < self.offset {
             self.offset = selected;
-        } else if selected >= self.offset.saturating_add(rows) {
-            self.offset = selected.saturating_add(1).saturating_sub(rows);
+        } else {
+            while selected
+                >= self
+                    .offset
+                    .saturating_add(self.visible_entry_count_from(self.offset))
+                && self.offset < selected
+            {
+                self.offset += 1;
+            }
         }
-        let maximum_offset = self.filtered_len().saturating_sub(rows);
-        self.offset = self.offset.min(maximum_offset);
+        self.offset = self.offset.min(self.maximum_list_offset());
     }
 
     fn filter_changed(&mut self) {
@@ -263,10 +317,10 @@ impl App {
             Key::PageUp => self.select(
                 self.selected_position()
                     .unwrap_or(0)
-                    .saturating_sub(layout::list_rows(self.width, self.height)),
+                    .saturating_sub(self.visible_entry_count_from(self.offset).max(1)),
             ),
             Key::PageDown => self.select(self.selected_position().map_or(0, |index| {
-                index.saturating_add(layout::list_rows(self.width, self.height))
+                index.saturating_add(self.visible_entry_count_from(self.offset).max(1))
             })),
             Key::Home => self.select(0),
             Key::End => self.select(usize::MAX),
@@ -504,40 +558,28 @@ mod tests {
 
     #[test]
     fn a_reordering_arrival_re_aims_the_viewport_at_the_selected_game() {
-        // The sibling test above proves `selected` survives a reordering
-        // arrival. It survives it whether or not the viewport follows, because
-        // `selected` is an index into `entries` and `entries` never moves. What
-        // moves is the row, and a row that moves out of `[offset, offset+rows)`
-        // is a selection the user cannot see — so this is the one test in the
-        // file that asserts `offset`.
-        let rows = crate::layout::list_rows(120, 8);
-        assert_eq!(rows, 2, "the window has to be smaller than the list");
-        let mut app = App::new(8);
-        app.update(Msg::Resize(120, 8));
-        add_surveyed(&mut app, 10, "Runtime one", Vec::new());
-        add_surveyed(&mut app, 20, "Runtime two", Vec::new());
-        add_surveyed(&mut app, 30, "Runtime three", Vec::new());
-        app.update(Msg::Key(Key::Down));
-        app.update(Msg::Key(Key::Down));
-        assert_eq!(app.selected_position(), Some(2));
-        assert_eq!(app.offset, 1, "the list is scrolled to its last row");
+        let mut app = App::new(12);
+        app.update(Msg::Resize(120, 12));
+        for id in 10..16 {
+            add_surveyed(&mut app, id, &format!("Runtime {id}"), Vec::new());
+        }
+        app.update(Msg::Key(Key::End));
+        assert_eq!(app.selected_position(), Some(5));
+        assert!(app.offset > 0, "the viewport is scrolled");
 
-        // Lands above all three, so every one of them moves down a row.
+        // Lands above the runtimes, moving the selected entry down one row.
         add_surveyed(&mut app, 40, "Alpha", vec![Reason::ShippingSuffix]);
 
         let position = app
             .selected_position()
             .expect("the selected game is still in the list");
-        assert_eq!(position, 3, "the selected game was pushed down by one");
+        assert_eq!(position, 6, "the selected game was pushed down by one");
         assert!(
-            position >= app.offset && position < app.offset + rows,
-            "the selected row has to stay inside the window, at {position} with offset {} and {rows} rows",
-            app.offset
-        );
-        assert_eq!(
-            shown(&app),
-            ["Runtime two", "Runtime three"],
-            "and the window is the one that contains it"
+            app.visible_entries()
+                .iter()
+                .any(|entry| entry.name == "Runtime 15"),
+            "the selected entry remains in the viewport at {position} with offset {}",
+            app.offset,
         );
     }
 
