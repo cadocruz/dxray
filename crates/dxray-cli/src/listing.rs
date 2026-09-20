@@ -977,9 +977,13 @@ fn render_games(
         }
     }
     let ordinary_len = ordinary.len();
+    let has_demoted = !demoted.is_empty();
     for (index, one) in ordinary.into_iter().enumerate() {
-        sink.text
-            .push_str(&tree_branch(&one.text, "    ", index + 1 == ordinary_len));
+        sink.text.push_str(&tree_branch(
+            &one.text,
+            "    ",
+            index + 1 == ordinary_len && !has_demoted,
+        ));
         sink.json.push_str(&one.json);
     }
     if !demoted.is_empty() {
@@ -1234,13 +1238,6 @@ fn tree_entry(
             if presentation == Presentation::Compact && details.incomplete {
                 tree_row(&mut out, "Status", "scan incomplete");
             }
-            if details.carries_evidence == Some(false) {
-                tree_row(
-                    &mut out,
-                    "Status",
-                    "no static evidence that this install is a game",
-                );
-            }
             if presentation != Presentation::Full && !details.features.is_empty() {
                 tree_row(&mut out, "Features", &details.features.join(", "));
             }
@@ -1284,7 +1281,10 @@ fn tree_entry(
             );
         }
     }
-    if presentation != Presentation::Full && nvapi.script.is_none() {
+    if presentation != Presentation::Full
+        && nvapi.script.is_none()
+        && nvapi_brief(nvapi) != "not applicable"
+    {
         tree_row(&mut out, "NVAPI", nvapi_brief(nvapi));
     }
     out
@@ -1306,7 +1306,6 @@ fn nvapi_brief(answer: &dxray_core::proton::Answer) -> &'static str {
 struct TreeFacts {
     result: String,
     features: Vec<String>,
-    carries_evidence: Option<bool>,
     incomplete: bool,
     survey_error: Option<String>,
     full_report: Option<String>,
@@ -1328,7 +1327,6 @@ fn tree_facts(
             return TreeFacts {
                 result: "Evidence unavailable".to_owned(),
                 features: Vec::new(),
-                carries_evidence: None,
                 incomplete: false,
                 survey_error: Some(format!("installation could not be read: {error}")),
                 full_report: None,
@@ -1340,7 +1338,6 @@ fn tree_facts(
         return TreeFacts {
             result: "No executable".to_owned(),
             features: Vec::new(),
-            carries_evidence: Some(survey.has_evidence()),
             incomplete: survey.is_incomplete(),
             survey_error: None,
             full_report: None,
@@ -1369,7 +1366,6 @@ fn tree_facts(
     TreeFacts {
         result,
         features,
-        carries_evidence: Some(survey.has_evidence()),
         incomplete: survey.is_incomplete(),
         survey_error: None,
         full_report,
