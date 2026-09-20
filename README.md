@@ -97,7 +97,9 @@ options exit 2 before scanning. Direct paths do not provide launcher
 or Proton context, so these reports mark the static NVAPI policy as not assessed.
 
 Inventory views identify entries by launcher, launcher ID (and Steam AppID when
-available) and installation path. Compact keeps search caveats visible; full adds
+available) and installation path. In compact inventories, installation paths
+inside a library are shown relative to its absolute library heading; paths
+outside it remain absolute. Compact keeps search caveats visible; full adds
 library and launcher roots, the complete executable ranking and static evidence.
 NVAPI findings describe the available static Proton policy, not runtime behavior.
 Notes and problems remain visible in both views, with the existing exit codes.

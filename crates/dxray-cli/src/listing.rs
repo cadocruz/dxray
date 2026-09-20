@@ -82,7 +82,7 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::ControlFlow;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use dxray_core::proton::Builds;
 use dxray_core::{Catalogue, Game, Launcher, Origin};
@@ -982,7 +982,7 @@ fn inventory_entry(
 ) -> String {
     use crate::report::Presentation;
     if presentation == Presentation::Compact {
-        return compact_entry(game, facts);
+        return compact_entry(game, place.library, facts);
     }
     let mut out = format!("\nEntry: {}\n", game.name);
     game_row(&mut out, "origin", game.origin.label());
@@ -1063,7 +1063,30 @@ fn inventory_entry(
     out
 }
 
-fn compact_entry(game: &Game, facts: &dxray_core::inspect::Inspection) -> String {
+fn compact_install_path(install: &Path, library: &Path) -> String {
+    if install.is_absolute()
+        && library.is_absolute()
+        && !install
+            .components()
+            .any(|part| part == Component::ParentDir)
+        && !library
+            .components()
+            .any(|part| part == Component::ParentDir)
+        && let Ok(relative) = install.strip_prefix(library)
+    {
+        let shown = if relative.as_os_str().is_empty() {
+            ".".to_owned()
+        } else {
+            format!("./{}", relative.display())
+        };
+        if shown.len() < install.as_os_str().len() {
+            return shown;
+        }
+    }
+    display_path(install)
+}
+
+fn compact_entry(game: &Game, library: &Path, facts: &dxray_core::inspect::Inspection) -> String {
     let mut out = format!(
         "\nEntry: {} | {} {} {} | {}\n",
         game.name,
@@ -1074,7 +1097,7 @@ fn compact_entry(game: &Game, facts: &dxray_core::inspect::Inspection) -> String
             "ID"
         },
         game.identity,
-        game.install_dir.display(),
+        compact_install_path(&game.install_dir, library),
     );
 
     match &facts.survey {

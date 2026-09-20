@@ -111,12 +111,67 @@ fn assert_compact_inventory(text: &str, legacy: &str, command: &str) {
         assert!(entries.iter().any(|line| {
             line.contains("Heroic / GOG ID 1207658691") && line.contains("Games/Hades")
         }));
+        assert!(entries.iter().any(|line| {
+            line.contains("Heroic / GOG ID 1207658691")
+                && line.contains(" | /")
+                && line.ends_with("/Games/Hades")
+        }));
         assert!(text.contains("note"));
     }
     assert!(
         text.contains("Static evidence only; runtime use and compatibility are not established.")
     );
     assert!(text.contains("unreadable"));
+}
+
+#[test]
+fn compact_steam_uses_each_library_header_for_relative_install_paths() {
+    let home = TempDir::new("compact-multiple-libraries");
+    let root = fake_steam(&home);
+    let other = home.path().join("another/long/steam/library/location");
+    let other_install = other.join("steamapps/common/dota 2 beta");
+    std::fs::create_dir_all(&other_install).unwrap();
+    std::fs::write(other_install.join("dota2.exe"), Image::x64().build()).unwrap();
+    std::fs::write(
+        other.join("steamapps/appmanifest_570.acf"),
+        "\"AppState\" { \"appid\" \"570\" \"name\" \"Dota 2\" \"installdir\" \"dota 2 beta\" }",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("steamapps/libraryfolders.vdf"),
+        format!(
+            "\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} \"1\" {{ \"path\" \"{}\" }} }}",
+            root.display(),
+            other.display()
+        ),
+    )
+    .unwrap();
+
+    let compact = dxray_with_home(home.path(), ["steam", "--view", "compact"]);
+    let text = stdout_of(&compact);
+    let entries: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("Entry: Dota 2"))
+        .collect();
+    assert_eq!(entries.len(), 2, "{text}");
+    assert!(entries.iter().all(|line| {
+        line.contains("Steam AppID 570") && line.ends_with("| ./steamapps/common/dota 2 beta")
+    }));
+    let first_library = text.find(&root.display().to_string()).unwrap();
+    let first_entry = text.find("Entry: Dota 2").unwrap();
+    let second_library = text.find(&other.display().to_string()).unwrap();
+    let second_entry = text.rfind("Entry: Dota 2").unwrap();
+    assert!(first_library < first_entry && first_entry < second_library);
+    assert!(second_library < second_entry, "{text}");
+    assert!(!text.contains("| /steamapps/common/dota 2 beta"));
+
+    let legacy = dxray_with_home(home.path(), ["steam"]);
+    let full = dxray_with_home(home.path(), ["steam", "--view", "full"]);
+    let json = dxray_with_home(home.path(), ["steam", "--json"]);
+    assert_eq!(compact.status.code(), legacy.status.code());
+    assert_eq!(compact.stderr, legacy.stderr);
+    assert_eq!(full.status.code(), legacy.status.code());
+    assert_eq!(json.status.code(), legacy.status.code());
 }
 
 use common::{Image, TempDir, dxray_with_home, stderr_of, stdout_of};

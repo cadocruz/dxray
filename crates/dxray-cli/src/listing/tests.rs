@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dxray_core::{Game, Identity, Launcher};
 
-use super::{Cause, Listing, compact_entry, nothing_found, nothing_found_json, render_games, scan};
+use super::{
+    Cause, Listing, compact_entry, compact_install_path, nothing_found, nothing_found_json,
+    render_games, scan,
+};
 
 #[test]
 fn compact_entry_keeps_a_short_truncation_caveat_without_ranking_details() {
@@ -23,11 +26,44 @@ fn compact_entry_keeps_a_short_truncation_caveat_without_ranking_details() {
             condition: Vec::new(),
         },
     };
-    let text = compact_entry(&dota(), &facts);
+    let text = compact_entry(&dota(), Path::new("/steam"), &facts);
     assert!(text.contains("Steam AppID 570"));
     assert!(text.contains("no static game evidence; not searched in full"));
     assert!(!text.contains("ranked"));
     assert!(!text.contains("512"));
+}
+
+#[test]
+fn compact_paths_use_only_the_containing_library_as_context() {
+    let library = Path::new("/very/long/steam/library/on/another/disk");
+    let inside = library.join("steamapps/common/Dota 2");
+    assert_eq!(
+        compact_install_path(&inside, library),
+        "./steamapps/common/Dota 2"
+    );
+    assert_eq!(compact_install_path(library, library), ".");
+
+    let sibling = Path::new("/very/long/steam/library/on/another/disk-2/Dota 2");
+    assert_eq!(
+        compact_install_path(sibling, library),
+        sibling.display().to_string()
+    );
+
+    let outside = Path::new("/Games/Hades");
+    assert_eq!(
+        compact_install_path(outside, library),
+        outside.display().to_string()
+    );
+
+    let escaping = Path::new("/very/long/steam/library/on/another/disk/../elsewhere");
+    assert_eq!(
+        compact_install_path(escaping, library),
+        escaping.display().to_string()
+    );
+    assert_eq!(
+        compact_install_path(&inside, Path::new("relative/library")),
+        inside.display().to_string()
+    );
 }
 
 fn listing(games: usize, problems: usize) -> Listing {
