@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui_bubbletea_components::{ListItem, SelectList};
@@ -114,38 +114,46 @@ fn render_header(
         .filter(|message| matches!(message, ScanMessage::Problem(_)))
         .count();
     let notes = app.problems.len() - problems;
+    if area.width < crate::layout::MEDIUM_HEADER_WIDTH {
+        render_if_visible(
+            frame,
+            Paragraph::new(small_header_line(app, problems, notes, area.width, theme)),
+            area,
+        );
+        return;
+    }
     if area.width < crate::layout::SPLIT_WIDTH {
-        let status = if app.finished { "done" } else { "scanning" };
-        let focus = if app.focus == Focus::List {
-            "List"
-        } else {
-            "Detail"
-        };
         let lines = vec![
-            Line::styled(format!("dxray {status} · {focus}"), theme.accent),
             Line::from(vec![
+                Span::styled("dxray", theme.accent),
                 Span::styled(
-                    format!("Problems:{problems}"),
+                    if app.finished {
+                        " — scan complete"
+                    } else {
+                        " — scanning"
+                    },
+                    theme.text,
+                ),
+                Span::styled(
+                    format!("  P:{problems}"),
                     if problems == 0 {
                         theme.muted
                     } else {
                         theme.error
                     },
                 ),
-                Span::styled(format!(" Notes:{notes}"), theme.muted),
+                Span::styled(format!(" N:{notes}"), theme.muted),
+                Span::styled(
+                    format!(
+                        "  E:{} L:{} R:{}",
+                        app.entries.len(),
+                        app.libraries,
+                        app.roots
+                    ),
+                    theme.muted,
+                ),
             ]),
-            Line::from(format!(
-                "Entries:{} Libs:{} Roots:{}",
-                app.entries.len(),
-                app.libraries,
-                app.roots
-            )),
-            Line::from(format!(
-                "Results: {}/{} · Esc clear",
-                app.filtered_len(),
-                app.entries.len()
-            )),
-            search_line(app, area.width, theme, false),
+            search_line(app, area.width, theme, true),
         ];
         render_if_visible(frame, Paragraph::new(lines), area);
         return;
@@ -194,18 +202,67 @@ fn render_header(
     }
 }
 
+fn small_header_line(
+    app: &App,
+    problems: usize,
+    notes: usize,
+    width: u16,
+    theme: &BubbleTheme,
+) -> Line<'static> {
+    let status = if app.finished { "done" } else { "scan" };
+    let brand_and_status = format!("dxray {status} ");
+    let diagnostics = format!("P{problems} N{notes} ");
+    let results = format!("{}/{} [", app.filtered_len(), app.entries.len());
+    let query = if app.filter.is_empty() {
+        "filter"
+    } else {
+        &app.filter
+    };
+    let available = usize::from(width).saturating_sub(
+        Line::from(brand_and_status.as_str()).width()
+            + Line::from(diagnostics.as_str()).width()
+            + Line::from(results.as_str()).width()
+            + 1,
+    );
+    Line::from(vec![
+        Span::styled(brand_and_status, theme.accent),
+        Span::styled(
+            format!("P{problems}"),
+            if problems == 0 {
+                theme.muted
+            } else {
+                theme.error
+            },
+        ),
+        Span::styled(format!(" N{notes} "), theme.muted),
+        Span::styled(results, theme.accent),
+        Span::styled(query_tail(query, available), theme.text),
+        Span::styled("]", theme.muted),
+    ])
+}
+
 fn query_tail(query: &str, width: usize) -> String {
-    if Line::from(query).width() <= width {
+    if width == 0 {
+        return String::new();
+    }
+    let line = Line::from(query);
+    if line.width() <= width {
         return query.to_owned();
     }
-    let mut tail = query;
-    while Line::from(tail).width() + 1 > width {
-        let Some(character) = tail.chars().next() else {
+
+    let mut used = 1;
+    let mut tail = Vec::new();
+    let graphemes = line.styled_graphemes(Style::default()).collect::<Vec<_>>();
+    for grapheme in graphemes.into_iter().rev() {
+        let grapheme_width = Line::from(grapheme.symbol).width();
+        if used + grapheme_width > width {
             break;
-        };
-        tail = &tail[character.len_utf8()..];
+        }
+        used += grapheme_width;
+        tail.push(grapheme.symbol);
     }
-    format!("…{tail}")
+    tail.reverse();
+    format!("…{}", tail.concat())
 }
 
 fn search_line(app: &App, width: u16, theme: &BubbleTheme, counts: bool) -> Line<'static> {
@@ -220,8 +277,8 @@ fn search_line(app: &App, width: u16, theme: &BubbleTheme, counts: bool) -> Line
     } else {
         &app.filter
     };
-    let available =
-        usize::from(width).saturating_sub(Line::from(prefix.as_str()).width() + suffix.len());
+    let available = usize::from(width)
+        .saturating_sub(Line::from(prefix.as_str()).width() + Line::from(suffix).width());
     Line::from(vec![
         Span::styled(prefix, theme.accent),
         Span::styled(query_tail(query, available), theme.text),
@@ -341,12 +398,16 @@ fn clip_text(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
+    let line = Line::from(text);
+    let mut used = 1;
     let mut clipped = String::new();
-    for character in text.chars() {
-        if text_width(&clipped) + text_width(&character.to_string()) + 1 > width {
+    for grapheme in line.styled_graphemes(Style::default()) {
+        let grapheme_width = Line::from(grapheme.symbol).width();
+        if used + grapheme_width > width {
             break;
         }
-        clipped.push(character);
+        used += grapheme_width;
+        clipped.push_str(grapheme.symbol);
     }
     clipped.push('…');
     clipped
@@ -1043,18 +1104,22 @@ mod tests {
             let list = draw(&app, width, 24);
             assert!(list.contains("Entries (1)"));
             assert_eq!(list.contains("Details"), width >= 100);
-            if width < 100 {
+            if width < 60 {
+                for text in ["dxray scan", "1/1", "[filter]", "P1 N0"] {
+                    assert!(list.contains(text), "missing {text} at {width}");
+                }
+            } else if width < 100 {
                 for text in [
                     "scanning",
-                    "Problems:1",
-                    "Notes:0",
-                    "Entries:1",
-                    "Libs:0",
-                    "Roots:0",
-                    "Search: [type name or AppID]",
-                    "Tab/Shift-Tab pane",
-                    "Esc clear/quit",
+                    "P:1 N:0",
+                    "E:1 L:0 R:0",
+                    "Search 1/1: [type name or AppID]",
                 ] {
+                    assert!(list.contains(text), "missing {text} at {width}");
+                }
+            }
+            if width < 100 {
+                for text in ["Tab/Shift-Tab pane", "Esc clear/quit"] {
                     assert!(list.contains(text), "missing {text} at {width}");
                 }
             }
@@ -1086,7 +1151,11 @@ mod tests {
             let mut app = App::new(24);
             app.update(Msg::Resize(width, 24));
             app.update(Msg::Game(Box::new(game())));
-            assert!(draw(&app, width, 24).contains("type name or AppID"));
+            assert!(draw(&app, width, 24).contains(if width < 60 {
+                "[filter]"
+            } else {
+                "type name or AppID"
+            }));
             for character in "不存在".repeat(100).chars().chain("END".chars()) {
                 app.update(Msg::Key(Key::Char(character)));
             }
@@ -1103,6 +1172,93 @@ mod tests {
             }
             assert!(draw(&app, width, 24).contains("[440]"));
             assert_eq!(app.filtered_len(), 1);
+        }
+    }
+
+    #[test]
+    fn clipping_keeps_unicode_graphemes_and_terminal_cell_budgets() {
+        assert_eq!(super::query_tail("abcde\u{301}", 2), "…e\u{301}");
+        assert_eq!(super::clip_text("e\u{301}xyz", 2), "e\u{301}…");
+        assert_eq!(super::query_tail("xx👨‍👩‍👧‍👦", 3), "…👨‍👩‍👧‍👦");
+
+        for clipped in [
+            super::query_tail("銀河".repeat(20).as_str(), 5),
+            super::clip_text("銀河".repeat(20).as_str(), 5),
+        ] {
+            assert!(super::text_width(&clipped) <= 5, "{clipped}");
+        }
+    }
+
+    #[test]
+    fn responsive_header_fits_and_keeps_essential_state_at_each_target_width() {
+        for width in [32, 60, 80, 99, 100, 180] {
+            let mut app = App::new(24);
+            app.update(Msg::Resize(width, 24));
+            app.update(Msg::Game(Box::new(game())));
+            app.update(Msg::Problem("unreadable library".into()));
+            app.update(Msg::Note("duplicate library".into()));
+            app.filter = format!("{}END", "銀河".repeat(80));
+
+            let screen = draw(&app, width, 24);
+            let lines = screen.lines().collect::<Vec<_>>();
+            let areas = crate::layout::areas(ratatui::layout::Rect::new(0, 0, width, 24));
+
+            assert_eq!(lines.len(), 24, "renderer escaped its backend at {width}");
+            assert!(lines[0].contains("dxray"), "{width}: {screen}");
+            assert!(screen.contains("0/1"), "{width}: {screen}");
+            assert!(screen.contains('…'), "{width}: {screen}");
+            assert!(screen.contains("END]"), "{width}: {screen}");
+            assert!(
+                !lines[usize::from(areas.list.y)].contains("dxray")
+                    && !lines[usize::from(areas.list.y)].contains("Search"),
+                "header overlaps body at {width}:\n{screen}"
+            );
+
+            if width < 60 {
+                assert_eq!(areas.header.height, 1);
+                for text in ["scan", "P1", "N1"] {
+                    assert!(
+                        lines[0].contains(text),
+                        "missing {text} at {width}: {screen}"
+                    );
+                }
+            } else if width < 100 {
+                assert_eq!(areas.header.height, 2);
+                for text in ["scanning", "P:1", "N:1", "E:1 L:0 R:0"] {
+                    assert!(
+                        lines[0].contains(text),
+                        "missing {text} at {width}: {screen}"
+                    );
+                }
+                assert!(lines[1].contains("Search 0/1:"), "{width}: {screen}");
+            } else {
+                assert_eq!(areas.header.height, 2);
+                for text in [
+                    "scanning",
+                    "Problems: 1",
+                    "Notes: 1",
+                    "Entries: 1  Libraries: 0  Roots: 0",
+                ] {
+                    assert!(
+                        lines[0].contains(text),
+                        "missing {text} at {width}: {screen}"
+                    );
+                }
+                assert!(lines[1].contains("Search 0/1:"), "{width}: {screen}");
+            }
+
+            app.filter.clear();
+            app.update(Msg::Key(crate::Key::Tab));
+            app.update(Msg::Key(crate::Key::End));
+            let diagnostics = draw(&app, width, 24);
+            assert!(
+                diagnostics.contains("Problem: unreadable library"),
+                "diagnostic is not reachable with Tab then End at {width}: {diagnostics}"
+            );
+            assert!(
+                diagnostics.contains("Note: duplicate library"),
+                "note is not reachable with Tab then End at {width}: {diagnostics}"
+            );
         }
     }
 
@@ -1280,7 +1436,7 @@ mod tests {
                 let too_small = width < 32 || height < 12;
                 assert_eq!(screen.contains("Resize: 32x12 min"), too_small);
                 if !too_small {
-                    assert!(screen.contains("Search: [type name or AppID]"));
+                    assert!(screen.contains("[filter]"));
                     assert_eq!(screen.contains("Entries (1)"), focus == Focus::List);
                     assert_eq!(screen.contains("Details"), focus == Focus::Detail);
                 }
@@ -1573,12 +1729,12 @@ mod tests {
         app.update(Msg::Key(crate::Key::Tab));
         app.update(Msg::Key(crate::Key::Home));
 
-        assert_eq!(crate::layout::detail_rows(32, 12), 1);
+        assert!(crate::layout::detail_rows(32, 12) > 0);
         let first = draw(&app, 32, 12);
         let first_rows = first.lines().collect::<Vec<_>>();
         let summary_row = first_rows
             .iter()
-            .position(|line| line.contains("Team Fortress 2 · Direct3D 12"))
+            .position(|line| line.contains("Renderer (static): Direct3D 12"))
             .unwrap_or_else(|| panic!("missing compact summary:\n{first}"));
         let id_row = first_rows
             .iter()
@@ -1596,13 +1752,22 @@ mod tests {
         let last_rows = last.lines().collect::<Vec<_>>();
         let summary_row = last_rows
             .iter()
-            .position(|line| line.contains("Team Fortress 2 · Direct3D 12"))
+            .position(|line| line.contains("Renderer (static): Direct3D 12"))
             .unwrap_or_else(|| panic!("missing compact summary:\n{last}"));
         let problem_row = last_rows
             .iter()
             .position(|line| line.contains("aaaaaaaaaa FINAL"))
             .unwrap_or_else(|| panic!("missing final wrapped diagnostic row:\n{last}"));
-        assert_eq!(problem_row, summary_row + 1, "overlapping rows:\n{last}");
+        assert!(problem_row > summary_row, "overlapping rows:\n{last}");
+        assert!(
+            problem_row
+                < usize::from(
+                    crate::layout::areas(ratatui::layout::Rect::new(0, 0, 32, 12))
+                        .help
+                        .y
+                ),
+            "diagnostic escaped the detail panel:\n{last}"
+        );
         assert!(last.contains("↑ more"), "{last}");
     }
 

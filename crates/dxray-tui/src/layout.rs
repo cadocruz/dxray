@@ -3,6 +3,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 pub(crate) const SPLIT_WIDTH: u16 = 100;
+pub(crate) const MEDIUM_HEADER_WIDTH: u16 = 60;
 
 /// The parts of the screen used by the browser.
 ///
@@ -19,10 +20,15 @@ pub(crate) struct Areas {
 #[must_use]
 pub(crate) fn areas(area: Rect) -> Areas {
     let compact = area.width < SPLIT_WIDTH;
+    let header_height = if area.width < MEDIUM_HEADER_WIDTH {
+        1
+    } else {
+        2
+    };
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(if compact { 5 } else { 2 }),
+            Constraint::Length(header_height),
             Constraint::Min(3),
             Constraint::Length(if compact {
                 3
