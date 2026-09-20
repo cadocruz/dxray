@@ -31,3 +31,22 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run tests
         run: cargo test --workspace --no-fail-fast
+
+  install:
+    name: Install binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - name: Install and smoke-test binaries
+        env:
+          CARGO_INSTALL_ROOT: ${{ runner.temp }}/dxray-install
+        run: |
+          cargo install --path crates/dxray-cli --locked
+          cargo install --path crates/dxray-tui --locked
+          "$CARGO_INSTALL_ROOT/bin/dxray" --version
+          "$CARGO_INSTALL_ROOT/bin/dxray-tui" --version
