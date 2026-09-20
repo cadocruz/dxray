@@ -1,83 +1,12 @@
-//! The listing behind `installed` and `steam`: which launcher installations are
-//! on this machine, which libraries they hold, and which games are in them.
+//! Inventory rendering for `installed` and `steam`.
 //!
-//! One pass over [`dxray_core::walk`], asked about a different set of
-//! launchers by each flag. `installed` passes
-//! [`launcher::all`](dxray_core::launcher::all) and `steam` passes Steam
-//! alone; nothing else differs, and neither flag knows the name of a launcher
-//! it was not handed. A launcher added to the registry appears under `installed`
-//! without a line being edited here.
+//! A single [`dxray_core::walk`] produces both human-readable text and JSONL,
+//! keeping the two surfaces consistent. Launcher discovery, executable ranking
+//! and static analysis remain in `dxray-core`; this module only presents them.
 //!
-//! That one pass produces **two renderings**: the indented listing a person
-//! reads and the JSONL `--json` prints. Not two renderers — every row is
-//! written to both in the same breath, out of the same values, and the flag
-//! chooses which finished rendering is printed. "What is installed on this
-//! machine" is the largest question in this file, and a second renderer would
-//! have been a second answer to it, free to disagree the day a launcher
-//! behaved oddly. See [`Listing::json`] for the shape and what it promises.
-//!
-//! That is deliberately not a flag per launcher. `--heroic` beside `steam`
-//! multiplies with every launcher added, and worse, it would have the command
-//! line inventing its own notion of "which store" beside the one
-//! [`Origin`] already is. A launcher is a value, and the
-//! set of them is an argument to one listing.
-//!
-//! This is discovery, and it no longer stops at the install directory: every
-//! game gets a `best` row on both renderings, naming the executable ranked
-//! highest inside that directory together with its score and the strongest
-//! reason for it — or, where the directory held no executable, where nothing
-//! in it argued for anything, or where it could not be read at all, a sentence
-//! saying which of those happened.
-//!
-//! Which `.exe` is the game is still a separate problem with its own wrong
-//! answers, and nothing in this file decides it: the ranking is
-//! [`dxray_core::inspect`](dxray_core::inspect()) turned into rows by
-//! [`crate::game::best_rows`], the same call the terminal browser makes, so
-//! the answer cannot depend on which surface asked. What is decided here is
-//! how much of it to print — the top candidate only, never as a bare filename,
-//! because a name on its own would read as a settled verdict about whatever
-//! `.exe` happened to sort first, and the score beside it is what lets a
-//! reader see a thin answer for what it is. The whole ranking, every candidate
-//! and every reason, is what `dxray game <dir>` prints. See
-//! [`render_games`].
-//!
-//! # What of this has met a real install
-//!
-//! This was written on a machine with no Steam on it, and said for a while that
-//! not one line of the Steam half had ever run against a real install. That is
-//! no longer true. The README's "What has met a real machine" records two runs
-//! on one Linux machine: the candidate paths found a real Steam,
-//! `libraryfolders.vdf` was where `dxray-core::steam` expects it — the modern
-//! `"0"`-block-with-`"path"` schema, reached through a `~/.steam/steam`
-//! symlink — the manifests spelled their keys as expected, a real Heroic
-//! configuration supplied three games beside them, and the `installdir` join
-//! this listing prints resolved, for a Windows game under Proton, to the folder
-//! the game is actually in.
-//!
-//! The split this file owns was exercised on that data too: a Heroic cache
-//! record with no install path came back as a note beside the games rather than
-//! instead of them and cost no exit code, and a malformed record came back as a
-//! problem, named in place, with the scan finishing around it.
-//!
-//! One machine, one client version, twice, is the weakest kind of real evidence
-//! and still a different kind from none. Twice on one machine is not two
-//! machines: both runs saw the same client write the same index the same way. What the tests here prove is that the
-//! layout `dxray-core::steam` believes in is handled correctly; what those runs
-//! add is that the belief is right about one install. An older or newer client,
-//! a Flatpak, a Snap and a custom prefix are still untried, and the README
-//! says so.
-//!
-//! # What is listed, and what is not filtered out
-//!
-//! Every application the launcher declares installed, including Steam's own
-//! Proton builds and redistributables. Both CLI and TUI present the complete
-//! inventory supplied by [`dxray_core::walk`], without consumer-specific
-//! classification or deduplication. Steam's `DownloadType` cannot reliably
-//! separate games from tools, so using it to filter would hide real games.
-//!
-//! What both surfaces do instead is order by what was observed: an install
-//! that was read and carries no evidence of being a game is printed after the
-//! ones that do, and says so in its own row. See [`render_games`].
+//! Every launcher-declared installation is retained. Entries without static
+//! game evidence are grouped after entries with evidence rather than filtered:
+//! Steam metadata cannot reliably distinguish games from tools or runtimes.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -89,58 +18,20 @@ use dxray_core::{Catalogue, Game, Launcher, Origin};
 
 use crate::record::{Record, display_path, push_optional, push_quoted, push_string};
 
-/// The listing, and whether anything went wrong while producing it.
+/// Rendered inventory and scan status.
 ///
-/// Errors are collected rather than returned, because one unreadable library
-/// must not hide the games in the others — and, now that more than one launcher
-/// can be walked at once, because a broken Steam must not hide a working
-/// Heroic. They are still counted, so the exit code can say that the scan was
-/// incomplete instead of quietly shrinking.
+/// Failures are collected so one unreadable library does not hide the rest of
+/// the inventory; they still make the scan incomplete.
 pub struct Listing {
+    /// Human-readable inventory.
     pub text: String,
-    /// The same listing as JSONL, built in the same pass as `text`.
-    ///
-    /// Not a second walk and not a rendering a flag turns on: every row is
-    /// written into both strings by the one call that also files it under
-    /// `problems`, `notes` or `incomplete`. There is no launcher behaviour
-    /// that can put a row on one surface and not on the other, because there
-    /// is no branch between them to disagree. The price is the bytes of a
-    /// rendering nobody asked for — tens of kilobytes for a hundred-game
-    /// library, next to a text listing of the same order — and that is what
-    /// buys the property.
-    ///
-    /// Private, and reachable only through [`Listing::json`]. The rows on
-    /// their own are not the answer: the summary that says how many games
-    /// there were, and whether anything went unread, is appended there and so
-    /// cannot be the part a caller forgets.
+    /// JSONL counterpart built during the same walk as [`Self::text`].
     json: String,
     pub problems: Vec<String>,
-    /// Caveats: everything was read, and there may be less of it than the user
-    /// expects. Separate from `problems` because they do not mean the same
-    /// thing and must not move the exit code the same way.
-    ///
-    /// One list rather than one per [`Cause`], so that a note cannot be filed
-    /// where a later reader forgets to look: everything that is a note is
-    /// here, and what differs between two notes rides on the entry.
-    ///
-    /// The causes and not the sentences, unlike `problems` and `incomplete`,
-    /// because the only question ever asked of this list is how many notes of
-    /// each kind a scan raised — the trailer counts them, and the words
-    /// themselves are already on both surfaces, written by the same call that
-    /// files the cause here. A note's sentence stored here as well would be a
-    /// second copy of a string this file has no reader for, and the day it
-    /// drifted from the row it came from there would be no way to tell which
-    /// of the two was the note. The problems *are* their sentences, because
-    /// `main` echoes them to stderr; notes are not echoed, because they do not
-    /// move the exit code.
+    /// Non-fatal caveats, categorized for the summary and JSON output.
     pub notes: Vec<Cause>,
-    /// Game directories that could not be searched in full, so the executable
-    /// named for them may not be the right one.
-    ///
-    /// A third list rather than a second use of `problems`, because the trailer
-    /// wording differs — nothing failed to *read*, a bounded walk simply ran out
-    /// of budget — but the exit code is the same, and that is the point. See
-    /// [`Listing::trailer`].
+    /// Directories that reached the scan limit and therefore make the scan
+    /// incomplete.
     pub incomplete: Vec<String>,
     pub roots: usize,
     pub libraries: usize,
@@ -157,60 +48,20 @@ pub struct Listing {
     pub name_origins: bool,
 }
 
-/// What a note is about, and therefore how large the doubt it raises is.
-///
-/// The launcher's own sentence names its own file and says what happened; what
-/// it cannot say is how much of the machine it casts doubt over, because the
-/// launcher does not know what the trailer counts. This is that, and it
-/// travels from the call that files the note to the clause that reports it.
-///
-/// Both are notes: everything was read, and neither moves the exit code. What
-/// differs is the size of what may be hidden, and it differs by an amount a
-/// reader has to be told about — a library index that declared nothing may be
-/// concealing whole drives of games, while a launcher record that could not be
-/// used is a fact about the launcher's bookkeeping that cost this listing
-/// nothing.
-///
-/// Decided at the one call site that files a note, from which part of the walk
-/// raised it, and spent three times: as the clause [`Listing::caveats`] words
-/// it with, as the `cause` key on the note's own JSON object, and as the key
-/// the summary counts it under. Wording the two through one clause is the
-/// defect this exists to stop: a stale Heroic cache record used to be reported
-/// as "1 index declared no libraries, so there may be more", which names a
-/// file nobody touched and a doubt that was not there.
+/// Category of a non-fatal scan note.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Cause {
-    /// A launcher's library index was read and declared no libraries, so the
-    /// library count — and the games count riding on it — may be short.
+    /// A launcher index declared no libraries; more may exist.
     Index,
-    /// One record inside a library was read and could not be used, and cost
-    /// this listing nothing. See
-    /// [`Catalogue::notes`](dxray_core::Catalogue::notes), which is where the
-    /// "cost nothing" half is established.
+    /// One record could not be used, without excluding another discovered game.
     Record,
 }
 
 impl Cause {
-    /// Every cause there is, in the order the summary counts them.
-    ///
-    /// The summary writes one count per entry here, zero included, so that a
-    /// consumer reading `notes.record` on a clean scan finds `0` and not a
-    /// missing key — a key that is absent because nothing happened and a key
-    /// that is absent because this build has never heard of it must not look
-    /// alike. A variant added to the enum has to be added here too, and
-    /// [`Cause::key`]'s exhaustive match is what makes the compiler ask.
+    /// All causes, in JSON summary order.
     pub const ALL: [Self; 2] = [Self::Index, Self::Record];
 
-    /// The word a program branches on. Stable, and promised as such.
-    ///
-    /// Not the human label, which is `note` for both — the label is the word
-    /// the terminal row is filed under, and a person reading `note` beside
-    /// "its index declared no libraries" has been told everything. A program
-    /// has not: the sentence is prose the README declares free to change, and
-    /// the `library` field is a fact about where the note sits, not about what
-    /// raised it. This is the one place the spelling of a cause is decided;
-    /// the note object and the summary both write it from here, so they cannot
-    /// disagree about which cause a note was.
+    /// Stable key for JSON consumers.
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
