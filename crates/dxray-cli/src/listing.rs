@@ -719,7 +719,7 @@ impl dxray_core::Visitor for Render {
         catalogue: Catalogue,
     ) -> ControlFlow<()> {
         self.listing.games += catalogue.games.len();
-        let label = library_label(library, self.install.as_deref());
+        let label = library_label(library, self.install.as_deref(), launcher.origin());
         let _ = writeln!(
             self.listing.text,
             "  Library: {label} ({} {})",
@@ -1008,8 +1008,8 @@ fn tree_branch(entry: &str, prefix: &str, last: bool) -> String {
 
 /// A main Steam library is already named by its launcher root; show its stable
 /// `steamapps` component instead of repeating the absolute path.
-fn library_label(library: &Path, root: Option<&Path>) -> String {
-    if root == Some(library) {
+fn library_label(library: &Path, root: Option<&Path>, origin: Origin) -> String {
+    if root == Some(library) && origin.key() == "steam" {
         return "steamapps".to_owned();
     }
     display_path(library)

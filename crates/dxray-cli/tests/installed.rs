@@ -306,6 +306,10 @@ fn every_launcher_on_the_machine_is_listed_and_each_game_says_which_one() {
         text.contains("Source: Heroic / GOG"),
         "and a Heroic game names the shop, not just the launcher, got:\n{text}"
     );
+    assert!(
+        text.contains(&format!("Library: {} (1 installation)", heroic.display())),
+        "the Heroic configuration is not a Steam library, got:\n{text}"
+    );
 }
 
 #[test]
