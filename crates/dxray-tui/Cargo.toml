@@ -26,7 +26,7 @@ dxray-core = { path = "../dxray-core" }
 #
 # What is left is still 68 crates against `dxray`'s 19. That number is the whole
 # argument for this being a second binary.
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 ratatui-tea = "0.2.0"
 ratatui-bubbletea-theme = "0.2.0"
 ratatui-bubbletea-components = "0.2.0"

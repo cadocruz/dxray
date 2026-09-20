@@ -72,12 +72,21 @@ pub fn list_rows(terminal_width: u16, terminal_height: u16) -> usize {
     .max(1)
 }
 
-/// Rows available inside the bordered detail panel.
-///
-/// Both panes have a one-cell border on their top and bottom.
+/// Summary rows reserved inside a detail viewport.
+#[must_use]
+pub(crate) const fn detail_summary_rows(viewport_height: u16) -> u16 {
+    match viewport_height {
+        0 => 0,
+        1 | 2 => 1,
+        _ => 2,
+    }
+}
+
+/// Exact rows available to the scrollable content below the summary.
 #[must_use]
 pub fn detail_rows(terminal_width: u16, terminal_height: u16) -> usize {
-    usize::from(detail_viewport(terminal_width, terminal_height).height).max(1)
+    let viewport_height = detail_viewport(terminal_width, terminal_height).height;
+    usize::from(viewport_height.saturating_sub(detail_summary_rows(viewport_height)))
 }
 
 /// Inner width of the detail panel, including the single-pane layout.

@@ -396,53 +396,145 @@ fn render_detail(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
 ) {
-    let lines = panel_lines(app);
     let mut title = "Details".to_owned();
     if app.focus == Focus::Detail {
         title.push_str(" · active");
     }
     let content_lines = detail_line_count(app);
-    if content_lines > crate::layout::detail_rows(app.width, app.height) {
-        write!(
-            title,
-            " · {}/{}",
-            app.detail_offset.saturating_add(1),
-            content_lines
-        )
-        .expect("writing to a String cannot fail");
+    let viewport_rows = crate::layout::detail_rows(app.width, app.height);
+    let max_offset = content_lines.saturating_sub(viewport_rows);
+    if max_offset > 0 {
+        let marker = match app.detail_offset {
+            0 => "↓ more",
+            offset if offset < max_offset => "↕ more",
+            _ => "↑ more",
+        };
+        write!(title, " · {marker}").expect("writing to a String cannot fail");
+        if area.width >= 60 {
+            write!(
+                title,
+                " · {}/{}",
+                app.detail_offset.saturating_add(1),
+                content_lines
+            )
+            .expect("writing to a String cannot fail");
+        }
     }
+    let block = theme
+        .titled_block(title)
+        .border_style(if app.focus == Focus::Detail {
+            theme.focused_border
+        } else {
+            theme.border
+        });
+    let inner = block.inner(area);
+    render_if_visible(frame, block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let summary_height = crate::layout::detail_summary_rows(inner.height);
+    let summary_area = ratatui::layout::Rect::new(inner.x, inner.y, inner.width, summary_height);
     render_if_visible(
         frame,
-        Paragraph::new(lines)
+        Paragraph::new(summary_lines(
+            app,
+            usize::from(inner.width),
+            summary_height == 1,
+        ))
+        .style(theme.text),
+        summary_area,
+    );
+    let body_area = ratatui::layout::Rect::new(
+        inner.x,
+        inner.y.saturating_add(summary_height),
+        inner.width,
+        inner.height.saturating_sub(summary_height),
+    );
+    render_if_visible(
+        frame,
+        detail_body(app)
             .style(theme.text)
-            .block(
-                theme
-                    .titled_block(title)
-                    .border_style(if app.focus == Focus::Detail {
-                        theme.focused_border
-                    } else {
-                        theme.border
-                    }),
-            )
-            .scroll((u16::try_from(app.detail_offset).unwrap_or(u16::MAX), 0))
-            .wrap(Wrap { trim: false }),
-        area,
+            .scroll((u16::try_from(app.detail_offset).unwrap_or(u16::MAX), 0)),
+        body_area,
     );
 }
 
-// Rendering and scroll measurement share the same content.
-fn panel_lines(app: &App) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from("Selected entry:").style(Modifier::BOLD)];
-    lines.extend(app.selected_entry().map_or_else(
+fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
+    app.selected_entry().map_or_else(
         || {
-            if app.filter.is_empty() {
-                vec![Line::from("Waiting for a game to be discovered.")]
-            } else {
-                vec![Line::from("No selected game matches the current filter.")]
+            if compact {
+                return vec![Line::from(clip_text(
+                    if app.filter.is_empty() {
+                        "Selected: waiting for discovery"
+                    } else {
+                        "Selected: no filter match"
+                    },
+                    width,
+                ))];
             }
+            vec![
+                Line::from("Selected entry:").style(Modifier::BOLD),
+                Line::from(if app.filter.is_empty() {
+                    "Waiting for a game to be discovered."
+                } else {
+                    "No selected game matches the current filter."
+                }),
+            ]
         },
-        |entry| detail_lines(entry, app.evidence_expanded),
-    ));
+        |entry| {
+            if compact {
+                return vec![Line::from(compact_summary(entry, width))];
+            }
+            vec![
+                Line::from(clip_text(
+                    &format!("Selected entry: {} ({})", entry.name, entry.id_label()),
+                    width,
+                )),
+                Line::from(clip_text(
+                    &format!("Renderer (static): {}", entry.headline()),
+                    width,
+                )),
+            ]
+        },
+    )
+}
+
+fn compact_summary(entry: &Entry, width: usize) -> String {
+    let separator = " · ";
+    let available = width.saturating_sub(text_width(separator));
+    let name_width = text_width(&entry.name);
+    let renderer = entry.headline();
+    let renderer_width = text_width(&renderer);
+    let mut name_budget = available.div_ceil(2);
+    let mut renderer_budget = available.saturating_sub(name_budget);
+    if name_width < name_budget {
+        name_budget = name_width;
+        renderer_budget = available.saturating_sub(name_budget);
+    } else if renderer_width < renderer_budget {
+        renderer_budget = renderer_width;
+        name_budget = available.saturating_sub(renderer_budget);
+    }
+    format!(
+        "{}{}{}",
+        clip_text(&entry.name, name_budget),
+        separator,
+        clip_text(&renderer, renderer_budget)
+    )
+}
+
+#[cfg(test)]
+fn panel_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = summary_lines(app, usize::MAX, false);
+    lines.extend(body_lines(app));
+    lines
+}
+
+// Rendering and scroll measurement share the same body.
+fn body_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = app
+        .selected_entry()
+        .map_or_else(Vec::new, |entry| detail_lines(entry, app.evidence_expanded));
     if !app.problems.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from("Scan diagnostics:").style(Modifier::BOLD));
@@ -458,64 +550,26 @@ fn panel_lines(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
+/// The body widget is also the source of its rendered line count. Keeping the
+/// wrap configuration here makes scrolling use Ratatui's exact compositor.
+fn detail_body(app: &App) -> Paragraph<'static> {
+    Paragraph::new(body_lines(app)).wrap(Wrap { trim: false })
+}
+
 /// Visual rows in the current detail pane. The reducer uses this to keep a
 /// scroll offset valid after selection, scan messages, and terminal resizes.
 pub(crate) fn detail_line_count(app: &App) -> usize {
-    let lines = panel_lines(app);
-    let width = usize::from(crate::layout::detail_width(app.width));
-    lines
-        .iter()
-        .map(|line| wrapped_line_count(line, width))
-        .sum()
-}
-
-/// Count the rows produced by Ratatui's word wrapping for the plain lines we
-/// render here. A width-only division undercounts strings made of several
-/// words that cannot share a row (for example, three six-character paths in a
-/// ten-cell panel), which made `End` stop before the actual last visual row.
-fn wrapped_line_count(line: &Line<'_>, width: usize) -> usize {
-    let width = width.max(1);
-    let text = line.to_string();
-    if text.is_empty() {
-        return 1;
-    }
-
-    let mut rows = 1_usize;
-    let mut row_width = 0_usize;
-    for token in text.split_inclusive(char::is_whitespace) {
-        let token_width = Line::from(token).width();
-        if token_width == 0 {
-            continue;
-        }
-        if !token.chars().next().is_some_and(char::is_whitespace)
-            && row_width > 0
-            && row_width.saturating_add(token_width) > width
-        {
-            rows += 1;
-            row_width = 0;
-        }
-        for character in token.chars() {
-            let character_width = Line::from(character.to_string()).width();
-            if row_width > 0 && row_width.saturating_add(character_width) > width {
-                rows += 1;
-                row_width = 0;
-            }
-            row_width = row_width.saturating_add(character_width);
-        }
-    }
-    rows
+    detail_body(app).line_count(crate::layout::detail_width(app.width))
 }
 
 fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
     let mut lines = vec![
-        Line::from(format!("{} ({})", entry.name, entry.id_label())),
+        Line::from(format!("ID: {}", entry.id_label())),
         Line::from(format!("Source: {}", entry.origin.label())),
-        Line::from(""),
-        Line::from(format!("Renderer (static): {}", entry.headline())),
     ];
     let qualifications = caveats(entry);
     if !qualifications.is_empty() {
-        lines.insert(2, Line::from(format!("Analysis:{qualifications}")));
+        lines.push(Line::from(format!("Analysis:{qualifications}")));
     }
     match &entry.best {
         Best::Ranked(ranked) => {
@@ -529,7 +583,15 @@ fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
             {
                 lines.push(Line::from("Renderer unknown from static evidence."));
             }
-            render_verdict(&mut lines, ranked, false);
+            match &ranked.verdict {
+                Ok(verdict) if verdict.is_empty() => lines.push(Line::from(
+                    "Evidence: executable read; no recognised graphics findings.",
+                )),
+                Err(error) => lines.push(Line::from(format!(
+                    "Evidence unavailable: could not read executable: {error}"
+                ))),
+                Ok(_) => {}
+            }
         }
         Best::NoExecutable => lines.push(Line::from("No executable was found in this install.")),
         Best::Unwalkable(error) => {
@@ -571,29 +633,19 @@ fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
         lines.push(Line::from(format!("Proton script: {}", script.display())));
     }
     if let Best::Ranked(ranked) = &entry.best {
-        render_verdict(&mut lines, ranked, true);
+        render_verdict(&mut lines, ranked);
         lines.push(Line::from(format!(
             "Executable: {} (score {}, {} candidates)",
             ranked.path.display(),
             ranked.score,
             ranked.of
         )));
-        if ranked.has_evidence() {
-            lines.extend(
-                ranked
-                    .reasons
-                    .iter()
-                    .map(|reason| Line::from(format!("• {reason}"))),
-            );
-        } else {
-            // `dxray --game`'s own sentence. A score with nothing under it
-            // reads as truncated output rather than as the finding it is:
-            // this is what a Visual C++ redistributable looks like when it
-            // is the best thing in the directory.
-            lines.push(Line::from(
-                "• nothing observed argues that this is the game",
-            ));
-        }
+        lines.extend(
+            ranked
+                .reasons
+                .iter()
+                .map(|reason| Line::from(format!("• {reason}"))),
+        );
     }
     if !entry.nvapi.condition.is_empty() {
         lines.push(Line::from("NVAPI condition:"));
@@ -611,44 +663,31 @@ fn detail_lines(entry: &Entry, expanded: bool) -> Vec<Line<'static>> {
 /// Adds the evidence read from the selected executable without interpreting it
 /// again. `dxray-core` owns the classification; the TUI only exposes every
 /// finding and the observation that supports it.
-fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked, expanded: bool) {
-    match &ranked.verdict {
-        Ok(verdict) if verdict.is_empty() => {
-            lines.push(Line::from(
-                "Evidence: executable read; no recognised graphics findings.",
-            ));
-        }
-        Ok(verdict) => {
-            lines.push(Line::from("Evidence:"));
-            lines.push(Line::from(
-                "Imports do not prove the renderer used at runtime.",
-            ));
-            render_findings(lines, "Renderers", &verdict.renderers, expanded);
-            render_findings(lines, "Infrastructure", &verdict.infrastructure, expanded);
-            lines.push(Line::from(""));
-            render_findings(lines, "Features", &verdict.features, expanded);
-            lines.push(Line::from(
-                "DLL presence does not prove a feature is enabled.",
-            ));
-            render_findings(lines, "Local overrides", &verdict.local_overrides, expanded);
-        }
-        Err(error) => {
-            lines.push(Line::from(format!(
-                "Evidence unavailable: could not read executable: {error}"
-            )));
-        }
+fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
+    let Ok(verdict) = &ranked.verdict else {
+        return;
+    };
+    if verdict.is_empty() {
+        return;
     }
+    lines.push(Line::from("Evidence:"));
+    lines.push(Line::from(
+        "Imports do not prove the renderer used at runtime.",
+    ));
+    render_findings(lines, "Renderers", &verdict.renderers);
+    render_findings(lines, "Infrastructure", &verdict.infrastructure);
+    lines.push(Line::from(""));
+    render_findings(lines, "Features", &verdict.features);
+    lines.push(Line::from(
+        "DLL presence does not prove a feature is enabled.",
+    ));
+    render_findings(lines, "Local overrides", &verdict.local_overrides);
 }
 
 /// Renders a complete verdict category, including empty categories. Keeping
 /// them visible means a missing category is not confused with one that was
 /// accidentally omitted by the detail view.
-fn render_findings(
-    lines: &mut Vec<Line<'static>>,
-    category: &str,
-    findings: &[Finding],
-    expanded: bool,
-) {
+fn render_findings(lines: &mut Vec<Line<'static>>, category: &str, findings: &[Finding]) {
     lines.push(Line::from(format!("{category}:")));
     if findings.is_empty() {
         lines.push(Line::from("  none"));
@@ -657,9 +696,6 @@ fn render_findings(
 
     for finding in findings {
         lines.push(Line::from(format!("  {}", finding.name)));
-        if !expanded {
-            continue;
-        }
         // The same sentence `dxray --game` prints, from the same function.
         lines.extend(
             finding
@@ -713,15 +749,15 @@ mod tests {
             assert!(expanded.contains("d3d12.dll (import)"));
             assert!(draw(&app, width, 30).contains("Enter collapse evidence"));
             app.update(Msg::Key(Key::PageDown));
-            app.update(Msg::Resize(width, 12));
+            app.update(Msg::Resize(width, 13));
             app.update(Msg::Key(Key::End));
-            assert!(draw(&app, width, 12).contains("global diagnostic"));
+            assert!(draw(&app, width, 13).contains("global diagnostic"));
             app.update(Msg::Key(Key::Enter));
             assert!(!app.evidence_expanded);
             assert!(
                 app.detail_offset
                     <= super::detail_line_count(&app)
-                        .saturating_sub(crate::layout::detail_rows(width, 12))
+                        .saturating_sub(crate::layout::detail_rows(width, 13))
             );
             app.update(Msg::Resize(width, 30));
             app.update(Msg::Key(Key::Home));
@@ -744,10 +780,10 @@ mod tests {
         app.update(Msg::Key(Key::Enter));
         assert!(!draw(&app, 180, 50).contains("Install:"));
     }
-    use ratatui::{Terminal, backend::TestBackend, text::Line};
+    use ratatui::{Terminal, backend::TestBackend};
     use ratatui_tea::Model;
 
-    use super::{compact_list_item, render, text_width, wrapped_line_count};
+    use super::{compact_list_item, render, text_width};
     use crate::{
         Msg,
         app::App,
@@ -1026,8 +1062,7 @@ mod tests {
             assert_eq!(app.focus, Focus::Detail);
             app.update(Msg::Key(Key::Home));
             app.update(Msg::Key(Key::PageDown));
-            let viewport = crate::layout::detail_viewport(width, 24);
-            assert_eq!(app.detail_offset, usize::from(viewport.height));
+            assert_eq!(app.detail_offset, crate::layout::detail_rows(width, 24));
             let detail = draw(&app, width, 24);
             assert!(detail.contains("Details"));
             assert_eq!(detail.contains("Entries (1)"), width >= 100);
@@ -1279,13 +1314,13 @@ mod tests {
         let mut previous = 0;
         for section in [
             "Team Fortress 2 (440)",
-            "Source: Steam",
             "Renderer (static):",
-            "Renderers:",
-            "Features:",
+            "Source: Steam",
             "Proton / NVAPI — static policy:",
             "Note: selection remains uncertain",
             "Paths and selection evidence:",
+            "Renderers:",
+            "Features:",
             "Executable:",
             "NVAPI condition:",
         ] {
@@ -1307,6 +1342,13 @@ mod tests {
             "original condition evidence",
         ] {
             assert!(screen.contains(evidence), "missing {evidence}:\n{screen}");
+        }
+        for evidence in [
+            "nvngx_dlss.dll (neighbour)",
+            "libxess.dll (neighbour)",
+            "sl.interposer.dll (neighbour)",
+        ] {
+            assert_eq!(screen.matches(evidence).count(), 1, "duplicated {evidence}");
         }
     }
 
@@ -1435,34 +1477,170 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_and_expanded_details_keep_each_status_once() {
+        let text = |entry: Entry, expanded: bool| {
+            let mut app = App::new(40);
+            app.update(Msg::Game(Box::new(entry)));
+            app.evidence_expanded = expanded;
+            super::panel_lines(&app)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let cases = [
+            (
+                ranked_entry(Ok(dxray_core::analysis::Verdict::default())),
+                "Evidence: executable read; no recognised graphics findings.",
+            ),
+            (
+                ranked_entry(Err("invalid PE header".to_owned())),
+                "Evidence unavailable: could not read executable: invalid PE header",
+            ),
+            {
+                let mut entry = ranked_entry(Ok(analyse(&Evidence {
+                    imports: vec!["d3d12.dll".into()],
+                    ..Evidence::default()
+                })));
+                let Best::Ranked(ranked) = &mut entry.best else {
+                    panic!("the fixture must have a ranked executable");
+                };
+                ranked.reasons.clear();
+                (entry, "• nothing observed argues that this is the game")
+            },
+        ];
+
+        for (entry, status) in cases {
+            for expanded in [false, true] {
+                let details = text(entry.clone(), expanded);
+                assert_eq!(
+                    details.matches(status).count(),
+                    1,
+                    "expanded={expanded}, status={status}:\n{details}"
+                );
+                assert!(details.contains(if expanded {
+                    "Evidence details [expanded]"
+                } else {
+                    "Evidence details [collapsed]"
+                }));
+            }
+        }
+    }
+
+    #[test]
     fn focused_detail_panel_renders_later_long_content_after_scrolling() {
         let mut app = App::new(12);
-        let mut entry = game();
+        let mut entry = ranked_entry(Ok(analyse(&Evidence {
+            imports: vec!["d3d12.dll".into()],
+            ..Evidence::default()
+        })));
         entry.notes = (0..30)
             .map(|index| format!("scroll proof {index}"))
             .collect();
+        app.update(Msg::Resize(120, 12));
         app.update(Msg::Game(Box::new(entry)));
 
         let initial = draw(&app, 120, 12);
         assert!(initial.contains("Entries (1) · active"));
         assert!(!initial.contains("scroll proof 20"));
+        assert!(initial.contains("↓ more"));
 
         app.update(Msg::Key(crate::Key::Tab));
         app.update(Msg::Key(crate::Key::End));
         let scrolled = draw(&app, 120, 12);
         assert!(scrolled.contains("Details · active"));
         assert!(scrolled.contains("scroll proof 29"));
-        assert!(!scrolled.contains("Team Fortress 2 (440)"));
+        assert!(scrolled.contains("Team Fortress 2 (440)"));
+        assert!(scrolled.contains("Renderer (static): Direct3D 12"));
+        assert!(scrolled.contains("↑ more"));
     }
 
     #[test]
-    fn wrapped_line_count_keeps_words_that_cannot_share_a_row_separate() {
-        // The text is 20 cells wide, so a simple `width.div_ceil()` would
-        // report two rows. A word wrapper needs three 6-cell rows instead.
+    fn minimum_detail_end_uses_the_rendered_wrap_count() {
+        let mut app = App::new(12);
+        let entry = ranked_entry(Ok(analyse(&Evidence {
+            imports: vec!["d3d12.dll".into()],
+            ..Evidence::default()
+        })));
+        app.update(Msg::Resize(32, 12));
+        app.update(Msg::Game(Box::new(entry)));
+        // At the 30-cell inner width, Ratatui renders this diagnostic in two
+        // rows. The former local approximation counted three because of the
+        // four spaces, so End selected a blank row after the content.
+        app.update(Msg::Problem(
+            "aa    aaaaaaaaaaaaaaa aaaaaaaaaa FINAL".into(),
+        ));
+        app.update(Msg::Key(crate::Key::Tab));
+        app.update(Msg::Key(crate::Key::Home));
+
+        assert_eq!(crate::layout::detail_rows(32, 12), 1);
+        let first = draw(&app, 32, 12);
+        let first_rows = first.lines().collect::<Vec<_>>();
+        let summary_row = first_rows
+            .iter()
+            .position(|line| line.contains("Team Fortress 2 · Direct3D 12"))
+            .unwrap_or_else(|| panic!("missing compact summary:\n{first}"));
+        let id_row = first_rows
+            .iter()
+            .position(|line| line.contains("ID: 440"))
+            .unwrap_or_else(|| panic!("missing complete ID:\n{first}"));
+        assert_eq!(id_row, summary_row + 1, "overlapping rows:\n{first}");
+        assert!(first.contains("↓ more"), "{first}");
+
+        app.update(Msg::Key(crate::Key::End));
         assert_eq!(
-            wrapped_line_count(&Line::from("abcdef abcdef abcdef"), 10),
-            3
+            app.detail_offset,
+            super::detail_line_count(&app) - crate::layout::detail_rows(32, 12)
         );
+        let last = draw(&app, 32, 12);
+        let last_rows = last.lines().collect::<Vec<_>>();
+        let summary_row = last_rows
+            .iter()
+            .position(|line| line.contains("Team Fortress 2 · Direct3D 12"))
+            .unwrap_or_else(|| panic!("missing compact summary:\n{last}"));
+        let problem_row = last_rows
+            .iter()
+            .position(|line| line.contains("aaaaaaaaaa FINAL"))
+            .unwrap_or_else(|| panic!("missing final wrapped diagnostic row:\n{last}"));
+        assert_eq!(problem_row, summary_row + 1, "overlapping rows:\n{last}");
+        assert!(last.contains("↑ more"), "{last}");
+    }
+
+    #[test]
+    fn small_details_pin_identity_and_primary_result_while_the_body_scrolls() {
+        for width in [32, 60, 99, 100] {
+            let mut app = App::new(13);
+            let mut entry = ranked_entry(Ok(analyse(&Evidence {
+                imports: vec!["d3d12.dll".into()],
+                ..Evidence::default()
+            })));
+            entry.notes = (0..30).map(|index| format!("long note {index}")).collect();
+            app.update(Msg::Resize(width, 13));
+            app.update(Msg::Game(Box::new(entry)));
+            app.update(Msg::Problem("last scroll row".into()));
+            app.update(Msg::Key(crate::Key::Tab));
+
+            let first = draw(&app, width, 13);
+            assert!(first.contains("Selected entry: Team"), "{width}:\n{first}");
+            assert!(
+                first.contains("Renderer (static): Direct3D 12"),
+                "{width}:\n{first}"
+            );
+            assert!(first.contains("↓ more"), "{width}:\n{first}");
+
+            app.update(Msg::Key(crate::Key::End));
+            let last = draw(&app, width, 13);
+            assert!(last.contains("Selected entry: Team"), "{width}:\n{last}");
+            assert!(
+                last.contains("Renderer (static): Direct3D 12"),
+                "{width}:\n{last}"
+            );
+            assert!(
+                last.contains("Problem: last scroll row"),
+                "{width}:\n{last}"
+            );
+            assert!(last.contains("↑ more"), "{width}:\n{last}");
+        }
     }
 
     #[test]
