@@ -42,7 +42,7 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
 
     render_header(app, &theme, frame, areas.header);
     if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::List {
-        render_list(app, &theme, frame, areas.list);
+        render_list(app, &theme, frame, areas.list, frame.area().width);
     }
     if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::Detail {
         render_detail(app, &theme, frame, areas.detail);
@@ -234,6 +234,7 @@ fn render_list(
     theme: &BubbleTheme,
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
+    terminal_width: u16,
 ) {
     let mut title = if app.filter.is_empty() {
         format!("Entries ({})", app.entries.len())
@@ -269,13 +270,17 @@ fn render_list(
         return;
     }
     let items = entries.iter().map(|entry| {
-        ListItem::new(entry.name.clone()).description(format!(
-            "{} · {}{} · {}",
-            entry.origin.label(),
-            entry.id_label(),
-            caveats(entry),
-            entry.headline()
-        ))
+        if terminal_width < crate::layout::SPLIT_WIDTH {
+            compact_list_item(entry, usize::from(inner.width))
+        } else {
+            ListItem::new(entry.name.clone()).description(format!(
+                "{} · {}{} · {}",
+                entry.origin.label(),
+                entry.id_label(),
+                caveats(entry),
+                entry.headline()
+            ))
+        }
     });
     let mut list = SelectList::new(items).theme(*theme);
     list.select(
@@ -283,6 +288,68 @@ fn render_list(
             .and_then(|selected| selected.checked_sub(app.offset)),
     );
     render_if_visible(frame, &list, inner);
+}
+
+fn compact_list_item(entry: &Entry, width: usize) -> ListItem {
+    // SelectList adds a two-cell marker and a three-cell separator.
+    let available = width.saturating_sub(5);
+    let name_floor = available.min(if width < 40 { 3 } else { 4 });
+    let description_budget = available.saturating_sub(name_floor);
+    let full_status = match entry.carries_evidence {
+        Some(true) => "static evidence found",
+        Some(false) => "no static game evidence",
+        None => "evidence unavailable",
+    };
+    let short_status = match entry.carries_evidence {
+        Some(true) => "static",
+        Some(false) => "no static",
+        None => "unavailable",
+    };
+    let id = entry.id_label();
+    let mut origin = entry.origin.label();
+    if width < 60 {
+        origin = origin.split(" / ").next().unwrap_or(origin);
+    }
+    let mut status = if width >= 60 {
+        full_status
+    } else {
+        short_status
+    };
+    if text_width(origin) + text_width(&id) + text_width(status) + 2 > description_budget {
+        status = short_status;
+    }
+    if text_width(origin) + text_width(status) + 3 > description_budget {
+        origin = origin.split(" / ").next().unwrap_or(origin);
+    }
+    let origin_budget = description_budget.saturating_sub(text_width(status) + 3);
+    let origin = clip_text(origin, origin_budget);
+    let id_budget = description_budget.saturating_sub(text_width(&origin) + text_width(status) + 2);
+    let id = clip_text(&id, id_budget);
+    let description = format!("{origin} {id} {status}");
+    let name_budget = available.saturating_sub(text_width(&description));
+    ListItem::new(clip_text(&entry.name, name_budget)).description(description)
+}
+
+fn text_width(text: &str) -> usize {
+    Line::from(text).width()
+}
+
+fn clip_text(text: &str, width: usize) -> String {
+    if text_width(text) <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut clipped = String::new();
+    for character in text.chars() {
+        if text_width(&clipped) + text_width(&character.to_string()) + 1 > width {
+            break;
+        }
+        clipped.push(character);
+    }
+    clipped.push('…');
+    clipped
 }
 
 /// The caveats that qualify the headline beside them, in the column that has
@@ -680,7 +747,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, text::Line};
     use ratatui_tea::Model;
 
-    use super::{render, wrapped_line_count};
+    use super::{compact_list_item, render, text_width, wrapped_line_count};
     use crate::{
         Msg,
         app::App,
@@ -775,6 +842,93 @@ mod tests {
                 assert!(screen.contains("Entries (0 of 1)"), "{screen}");
                 assert!(screen.contains("No matches"));
                 app.filter.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn compact_list_keeps_steam_identity_and_static_status_visible() {
+        let mut entry = game();
+        entry.name = "Marvel's Guardians of the Galaxy".into();
+        entry.identity = dxray_core::Identity::SteamApp(1_088_850);
+        entry.carries_evidence = Some(true);
+        let mut app = App::new(24);
+        app.update(Msg::Game(Box::new(entry)));
+
+        for width in [32, 60, 80, 99, 100, 180] {
+            app.update(Msg::Resize(width, 24));
+            let screen = draw(&app, width, 24);
+            let row = screen.lines().find(|line| line.contains("Steam")).unwrap();
+            if width < 100 {
+                assert!(row.contains("1088850"), "{width}: {row}");
+                assert!(row.contains('M'), "{width}: {row}");
+                assert!(row.contains("static"), "{width}: {row}");
+            }
+            if (80..100).contains(&width) {
+                assert!(
+                    row.contains("Marvel's Guardians of the Galaxy"),
+                    "{width}: {row}"
+                );
+                assert!(row.contains("static evidence found"), "{width}: {row}");
+            }
+        }
+    }
+
+    #[test]
+    fn compact_list_handles_long_heroic_ids_and_unicode() {
+        let mut entry = game();
+        entry.name = "Étoile 銀河 — a very long title".into();
+        entry.origin = dxray_core::heroic::Store::Epic.origin();
+        entry.identity = dxray_core::Identity::Native("abcdef0123456789abcdef0123456789".into());
+        entry.carries_evidence = Some(false);
+        let mut app = App::new(24);
+        app.update(Msg::Game(Box::new(entry)));
+
+        for width in [32, 60, 80, 99, 100, 180] {
+            app.update(Msg::Resize(width, 24));
+            let screen = draw(&app, width, 24);
+            if width < 100 {
+                let row = screen.lines().find(|line| line.contains("Heroic")).unwrap();
+                assert!(row.contains('É'), "{width}: {row}");
+                assert!(row.contains('a'), "{width}: {row}");
+                assert!(row.contains("static"), "{width}: {row}");
+                assert!(row.contains('…') || row.contains("abcdef0123456789abcdef0123456789"));
+                if width >= 80 {
+                    assert!(
+                        row.contains("abcdef0123456789abcdef0123456789"),
+                        "{width}: {row}"
+                    );
+                }
+                if width == 99 {
+                    assert!(row.contains("no static game evidence"), "{width}: {row}");
+                }
+            } else {
+                assert!(screen.contains("Étoile"), "{width}: {screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn compact_list_item_fits_unicode_cells_and_keeps_status() {
+        let mut entry = game();
+        entry.name = "銀河 Étoile".repeat(20);
+        entry.origin = dxray_core::heroic::Store::Epic.origin();
+        entry.identity = dxray_core::Identity::Native("id0123456789".repeat(8));
+        for (evidence, marker) in [
+            (Some(true), "static"),
+            (Some(false), "no static"),
+            (None, "unavailable"),
+        ] {
+            entry.carries_evidence = evidence;
+            for width in [32_u16, 60, 80, 99] {
+                let item = compact_list_item(&entry, usize::from(width - 2));
+                let description = item.description_text().unwrap();
+                let drawn_width = 5 + text_width(item.label()) + text_width(description);
+                assert!(drawn_width <= usize::from(width - 2), "{width}: {item:?}");
+                assert!(!item.label().is_empty(), "{width}: {item:?}");
+                assert!(description.contains("Heroic"), "{width}: {item:?}");
+                assert!(description.contains(marker), "{width}: {item:?}");
+                assert!(description.contains("id"), "{width}: {item:?}");
             }
         }
     }
