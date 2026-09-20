@@ -444,8 +444,8 @@ fn a_game_says_which_launcher_supplied_it_when_more_than_one_could_have() {
     render_named(&mut out, &[dota(), hades()], true);
 
     assert!(
-        out.contains("Source: Steam"),
-        "the Steam game names Steam, got {out:?}"
+        !out.contains("Source: Steam"),
+        "the Steam block already establishes the source, got {out:?}"
     );
     assert!(
         out.contains("Source: Heroic / GOG"),
@@ -481,13 +481,9 @@ fn a_game_with_no_proton_prefix_still_gets_a_row_saying_so() {
         out.contains("not determined"),
         "the row must not read as an answer, got {out:?}"
     );
-    // Compared against the text with its wrapping taken out, because the
-    // sentence is long enough to be folded across two lines and the test is
-    // about what it says, not about where it breaks.
-    let unwrapped = out.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        unwrapped.contains("has not been run under Proton"),
-        "and it must say why there is none, got {out:?}"
+        out.contains("NVAPI: not determined"),
+        "and it must retain the refusal, got {out:?}"
     );
 }
 
@@ -836,8 +832,8 @@ fn a_demoted_game_keeps_every_row_it_would_have_had_further_up() {
 
     render_named(&mut out, &[runtime], true);
 
-    assert!(out.contains("Source: Steam"), "got:\n{out}");
-    assert!(out.contains("NVAPI:"), "got:\n{out}");
+    assert!(!out.contains("Source: Steam"), "got:\n{out}");
+    assert!(out.contains("NVAPI: not determined"), "got:\n{out}");
 }
 
 #[test]
@@ -1032,14 +1028,12 @@ fn golden_scan() -> Listing {
 const GOLDEN_TEXT: &str = concat!(
     "golden [/dxray-golden]\n",
     "  note        its index declared no libraries\n",
-    "  Library: /dxray-golden\n",
-    "    ├─ 570  Dota 2  [Evidence unavailable]\n",
-    "    │  Path: ./dota 2 beta\n",
-    "    │  Source: Steam\n",
-    "    │  Exec: (directory could not be read: No such file or directory (os error 2))\n",
-    "    │  Status: installation could not be read: No such file or directory (os error 2)\n",
-    "    │  NVAPI: not determined: /dxray-golden/steamapps/compatdata/570: no compatibility prefix, so this game has not been run under Proton and there is no build to read a policy out of\n",
-    "    │  Scope: static policy only; runtime use is not established\n",
+    "  Library: steamapps (1 installation)\n",
+    "    └─ 570  Dota 2  [Evidence unavailable]\n",
+    "       Path: ./dota 2 beta\n",
+    "       Exec: (directory could not be read: No such file or directory (os error 2))\n",
+    "       Status: installation could not be read: No such file or directory (os error 2)\n",
+    "       NVAPI: not determined\n",
     "  note        a cache record has no install_path\n",
     "  unreadable  appmanifest_999.acf: unreadable\n",
 );
@@ -1241,11 +1235,11 @@ fn a_games_rows_reach_the_json_whole_where_the_terminal_had_to_fold_them() {
         rendered.json
     );
     assert!(
-        rendered.text.contains(sentence),
-        "the tree keeps each diagnostic whole, got:\n{}",
+        !rendered.text.contains(sentence),
+        "the inventory keeps long NVAPI prose in JSON and full view, got:\n{}",
         rendered.text
     );
-    for label in ["origin", "best", "nvapi"] {
+    for label in ["best", "nvapi"] {
         assert!(
             rendered
                 .json

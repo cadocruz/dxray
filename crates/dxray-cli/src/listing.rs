@@ -697,7 +697,6 @@ impl dxray_core::Visitor for Render {
 
     fn library(&mut self, origin: Origin, library: &Path) -> ControlFlow<()> {
         self.listing.libraries += 1;
-        let _ = writeln!(self.listing.text, "  Library: {}", library.display());
 
         let json = &mut self.listing.json;
         json.push_str("{\"kind\":\"library\",");
@@ -720,6 +719,17 @@ impl dxray_core::Visitor for Render {
         catalogue: Catalogue,
     ) -> ControlFlow<()> {
         self.listing.games += catalogue.games.len();
+        let label = library_label(library, self.install.as_deref());
+        let _ = writeln!(
+            self.listing.text,
+            "  Library: {label} ({} {})",
+            catalogue.games.len(),
+            if catalogue.games.len() == 1 {
+                "installation"
+            } else {
+                "installations"
+            }
+        );
         // A library that produced nothing but failures is not an empty library,
         // and "(no games installed)" would be a claim about a directory nobody
         // managed to look inside. The rows below say what happened instead.
@@ -901,7 +911,8 @@ fn render_games(
     // rows of the ones that argue nothing — a few kilobytes — where
     // partitioning the games first would have made every inspection in the
     // library happen before the first line was printed.
-    let mut demoted = Rendered::default();
+    let mut ordinary = Vec::new();
+    let mut demoted = Vec::new();
     for game in games {
         // One call, shared with the terminal browser, so that the facts
         // established about a game cannot depend on which surface asked.
@@ -959,20 +970,49 @@ fn render_games(
         // Both renderings of one game move together, into the same group. The
         // pair is what stops a demoted game from being demoted on one surface
         // and not on the other.
-        let (text, json) = if lacks_evidence {
-            (&mut demoted.text, &mut demoted.json)
+        if lacks_evidence {
+            demoted.push(one);
         } else {
-            (&mut *sink.text, &mut *sink.json)
-        };
-        text.push_str(&one.text);
-        json.push_str(&one.json);
+            ordinary.push(one);
+        }
     }
-    if !demoted.text.is_empty() {
+    let ordinary_len = ordinary.len();
+    for (index, one) in ordinary.into_iter().enumerate() {
         sink.text
-            .push_str("    Installations without game evidence:\n");
-        sink.text.push_str(&demoted.text);
+            .push_str(&tree_branch(&one.text, "    ", index + 1 == ordinary_len));
+        sink.json.push_str(&one.json);
     }
-    sink.json.push_str(&demoted.json);
+    if !demoted.is_empty() {
+        sink.text
+            .push_str("    └─ Installations without game evidence\n");
+        let demoted_len = demoted.len();
+        for (index, one) in demoted.into_iter().enumerate() {
+            sink.text
+                .push_str(&tree_branch(&one.text, "      ", index + 1 == demoted_len));
+            sink.json.push_str(&one.json);
+        }
+    }
+}
+
+/// Places a rendered game under its final sibling position once the library's
+/// complete grouping is known. Analysis happens one game at a time; only the
+/// small rendered records wait long enough for the tree to draw a truthful
+/// final branch.
+fn tree_branch(entry: &str, prefix: &str, last: bool) -> String {
+    let marker = if last { "└" } else { "├" };
+    let continuation = if last { "   " } else { "│  " };
+    entry
+        .replacen("    ├", &format!("{prefix}{marker}"), 1)
+        .replace("    │  ", &format!("{prefix}{continuation}"))
+}
+
+/// A main Steam library is already named by its launcher root; show its stable
+/// `steamapps` component instead of repeating the absolute path.
+fn library_label(library: &Path, root: Option<&Path>) -> String {
+    if root == Some(library) {
+        return "steamapps".to_owned();
+    }
+    display_path(library)
 }
 
 #[cfg(test)]
@@ -1179,6 +1219,9 @@ fn tree_entry(
             if matches!(*label, "proton" | "nvapi") {
                 continue;
             }
+            if *label == "origin" && value == "Steam" {
+                continue;
+            }
             tree_row(&mut out, &tree_label(label), value);
         }
     }
@@ -1231,20 +1274,33 @@ fn tree_entry(
                 _ => display_path(script),
             }
         };
-        tree_row(&mut out, "Proton", &script);
+        if presentation == Presentation::Full {
+            tree_row(&mut out, "Proton", &script);
+        } else {
+            tree_row(
+                &mut out,
+                "Proton",
+                &format!("{script} [NVAPI: {}]", nvapi_brief(nvapi)),
+            );
+        }
     }
-    if presentation != Presentation::Full {
-        tree_row(&mut out, "NVAPI", &nvapi.verdict);
-    }
-
-    if presentation != Presentation::Compact {
-        tree_row(
-            &mut out,
-            "Scope",
-            "static policy only; runtime use is not established",
-        );
+    if presentation != Presentation::Full && nvapi.script.is_none() {
+        tree_row(&mut out, "NVAPI", nvapi_brief(nvapi));
     }
     out
+}
+
+/// A scan-sized NVAPI summary. The complete policy sentence stays in `full`,
+/// where it can be read without displacing the next game in the inventory.
+fn nvapi_brief(answer: &dxray_core::proton::Answer) -> &'static str {
+    match answer.available {
+        Some(true) => "allowed",
+        Some(false) => "withheld",
+        None if answer.verdict.starts_with("not applicable") => "not applicable",
+        None if answer.verdict.starts_with("not determined") => "not determined",
+        None if answer.script.is_some() => "not determined",
+        None => "not assessed",
+    }
 }
 
 struct TreeFacts {

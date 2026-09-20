@@ -415,7 +415,7 @@ fn the_steam_listing_names_the_build_a_game_ran_under_and_what_it_does_to_nvapi(
         "the build is named beside the verdict, got: {text}"
     );
     assert!(
-        text.contains("NVAPI: NVAPI is withheld"),
+        text.contains("[NVAPI: withheld]"),
         "and the verdict is drawn from that build's script, got: {text}"
     );
 }
@@ -445,11 +445,7 @@ fn a_game_that_has_never_run_under_proton_gets_a_row_and_costs_no_exit_code() {
         "no answer is not a failed scan: {text}"
     );
     assert!(
-        text.contains("NVAPI: not determined:"),
+        text.contains("NVAPI: not determined"),
         "but it still says so, got: {text}"
-    );
-    assert!(
-        text.contains("has not been run under Proton"),
-        "and why, got: {text}"
     );
 }
