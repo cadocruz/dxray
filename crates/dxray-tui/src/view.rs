@@ -4,39 +4,70 @@ use std::fmt::Write as _;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui_bubbletea_theme::{BubbleTheme, Palette, Symbols};
 
 use crate::app::{App, Focus, ScanMessage};
 use crate::entry::{Best, Entry, Ranked};
 use dxray_core::analysis::Finding;
 
+const BACKGROUND: Color = Color::Rgb(8, 15, 24);
+const FOREGROUND: Color = Color::Rgb(226, 232, 240);
+const MUTED: Color = Color::Rgb(148, 163, 184);
+const ACCENT: Color = Color::Rgb(34, 211, 238);
+const BORDER: Color = Color::Rgb(96, 165, 250);
+const WARNING: Color = Color::Rgb(250, 204, 21);
+const ERROR: Color = Color::Rgb(248, 113, 113);
+
+fn background_style() -> Style {
+    Style::new().fg(FOREGROUND).bg(BACKGROUND)
+}
+
+fn theme() -> BubbleTheme {
+    let mut theme = BubbleTheme::new(
+        Palette {
+            foreground: FOREGROUND,
+            muted: MUTED,
+            accent: ACCENT,
+            border: BORDER,
+            focused_border: ACCENT,
+            success: ACCENT,
+            warning: WARNING,
+            error: ERROR,
+            selected_background: BACKGROUND,
+        },
+        Symbols::default(),
+    );
+    theme.text = theme.text.bg(BACKGROUND);
+    theme.muted = theme.muted.bg(BACKGROUND);
+    theme.accent = theme.accent.bg(BACKGROUND);
+    theme.success = theme.success.bg(BACKGROUND);
+    theme.warning = theme.warning.bg(BACKGROUND);
+    theme.error = theme.error.bg(BACKGROUND);
+    theme.border = theme.border.bg(BACKGROUND);
+    theme.focused_border = theme.focused_border.bg(BACKGROUND);
+    theme.title = theme.accent.add_modifier(Modifier::BOLD);
+    theme.selected = theme.accent.add_modifier(Modifier::REVERSED);
+    theme.help_key = theme.help_key.bg(BACKGROUND);
+    theme.help_desc = theme.help_desc.bg(BACKGROUND);
+    theme
+}
+
 pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     if frame.area().width == 0 || frame.area().height == 0 {
         return;
     }
+    frame.render_widget(Block::new().style(background_style()), frame.area());
     if frame.area().width < 32 || frame.area().height < 12 {
         frame.render_widget(
-            Paragraph::new("Resize: 32x12 min").wrap(Wrap { trim: false }),
+            Paragraph::new("Resize: 32x12 min")
+                .style(Style::new().fg(WARNING).bg(BACKGROUND))
+                .wrap(Wrap { trim: false }),
             frame.area(),
         );
         return;
     }
-    let mut theme = BubbleTheme::new(
-        Palette {
-            foreground: Color::Reset,
-            muted: Color::Gray,
-            accent: Color::Cyan,
-            border: Color::DarkGray,
-            focused_border: Color::Cyan,
-            error: Color::Red,
-            selected_background: Color::Reset,
-            ..Palette::default()
-        },
-        Symbols::default(),
-    );
-    theme.title = theme.text.add_modifier(Modifier::BOLD);
-    theme.selected = theme.accent.add_modifier(Modifier::REVERSED);
+    let theme = theme();
     let areas = crate::layout::areas(frame.area());
 
     render_header(app, &theme, frame, areas.header);
@@ -116,7 +147,8 @@ fn render_header(
     if area.width < crate::layout::MEDIUM_HEADER_WIDTH {
         render_if_visible(
             frame,
-            Paragraph::new(small_header_line(app, problems, notes, area.width, theme)),
+            Paragraph::new(small_header_line(app, problems, notes, area.width, theme))
+                .style(theme.text),
             area,
         );
         return;
@@ -154,7 +186,7 @@ fn render_header(
             ]),
             search_line(app, area.width, theme, true),
         ];
-        render_if_visible(frame, Paragraph::new(lines), area);
+        render_if_visible(frame, Paragraph::new(lines).style(theme.text), area);
         return;
     }
     render_if_visible(
@@ -189,13 +221,14 @@ fn render_header(
                 ),
                 theme.muted,
             ),
-        ])),
+        ]))
+        .style(theme.text),
         area,
     );
     if area.height >= 2 {
         render_if_visible(
             frame,
-            Paragraph::new(search_line(app, area.width, theme, true)),
+            Paragraph::new(search_line(app, area.width, theme, true)).style(theme.text),
             ratatui::layout::Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
         );
     }
@@ -300,13 +333,15 @@ fn render_list(
     if app.focus == Focus::List {
         title.push_str(" · active");
     }
-    let block = theme
-        .titled_block(title)
-        .border_style(if app.focus == Focus::List {
-            theme.focused_border
-        } else {
-            theme.border
-        });
+    let block =
+        theme
+            .titled_block(title)
+            .style(theme.text)
+            .border_style(if app.focus == Focus::List {
+                theme.focused_border
+            } else {
+                theme.border
+            });
     let inner = block.inner(area);
     render_if_visible(frame, block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -366,7 +401,7 @@ fn render_list(
             compact_list_line(entry, usize::from(inner.width), theme.text, is_selected)
         });
     }
-    render_if_visible(frame, Paragraph::new(lines), inner);
+    render_if_visible(frame, Paragraph::new(lines).style(theme.text), inner);
 }
 
 fn table_line(
@@ -547,13 +582,15 @@ fn render_detail(
             .expect("writing to a String cannot fail");
         }
     }
-    let block = theme
-        .titled_block(title)
-        .border_style(if app.focus == Focus::Detail {
-            theme.focused_border
-        } else {
-            theme.border
-        });
+    let block =
+        theme
+            .titled_block(title)
+            .style(theme.text)
+            .border_style(if app.focus == Focus::Detail {
+                theme.focused_border
+            } else {
+                theme.border
+            });
     let inner = block.inner(area);
     render_if_visible(frame, block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -629,8 +666,9 @@ fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
                     width,
                 ))
                 .style(
-                    Style::default()
-                        .fg(Color::Cyan)
+                    Style::new()
+                        .fg(ACCENT)
+                        .bg(BACKGROUND)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]
@@ -680,7 +718,7 @@ fn body_lines(app: &App) -> Vec<Line<'static>> {
         lines.extend(app.problems.iter().map(|message| {
             let line = Line::from(format!("{}: {}", message.label(), message.text()));
             match message {
-                ScanMessage::Problem(_) => line.style(Color::Red),
+                ScanMessage::Problem(_) => line.style(Style::new().fg(ERROR).bg(BACKGROUND)),
                 ScanMessage::Note(_) => line,
             }
         }));
@@ -822,18 +860,19 @@ fn render_advanced_diagnostics(lines: &mut Vec<Line<'static>>, entry: &Entry) {
 
 fn section_title(title: &'static str) -> Line<'static> {
     Line::from(title).style(
-        Style::default()
-            .fg(Color::Cyan)
+        Style::new()
+            .fg(ACCENT)
+            .bg(BACKGROUND)
             .add_modifier(Modifier::BOLD),
     )
 }
 
 fn muted_line(text: impl Into<String>) -> Line<'static> {
-    Line::from(text.into()).style(Color::Gray)
+    Line::from(text.into()).style(Style::new().fg(MUTED).bg(BACKGROUND))
 }
 
 fn error_line(text: impl Into<String>) -> Line<'static> {
-    Line::from(text.into()).style(Color::Red)
+    Line::from(text.into()).style(Style::new().fg(ERROR).bg(BACKGROUND))
 }
 
 /// Adds the evidence read from the selected executable without interpreting it
@@ -961,6 +1000,7 @@ mod tests {
     use ratatui::{
         Terminal,
         backend::TestBackend,
+        buffer::Buffer,
         style::{Modifier, Style},
     };
     use ratatui_tea::Model;
@@ -1007,6 +1047,18 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn assert_background(buffer: &Buffer, label: &str) {
+        for y in buffer.area.y..buffer.area.bottom() {
+            for x in buffer.area.x..buffer.area.right() {
+                assert_eq!(
+                    buffer[(x, y)].bg,
+                    super::BACKGROUND,
+                    "background at ({x}, {y}) in {label}"
+                );
+            }
+        }
     }
 
     fn ranked_entry(verdict: Result<dxray_core::analysis::Verdict, String>) -> Entry {
@@ -1532,7 +1584,6 @@ mod tests {
 
     #[test]
     fn focus_and_problem_color_have_textual_equivalents() {
-        use ratatui::style::Color;
         let mut app = App::new(24);
         app.update(Msg::Problem("unreadable library".into()));
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
@@ -1543,14 +1594,14 @@ mod tests {
             let header: String = (0..120).map(|x| buffer[(x, 0)].symbol()).collect();
             let problem_column =
                 u16::try_from(header.chars().position(|c| c == 'P').unwrap()).unwrap();
-            assert_eq!(buffer[(problem_column, 0)].fg, Color::Red);
+            assert_eq!(buffer[(problem_column, 0)].fg, super::ERROR);
             let areas = crate::layout::areas(buffer.area);
             assert_eq!(
                 buffer[(areas.list.x, areas.list.y)].fg,
                 if focus == crate::app::Focus::List {
-                    Color::Cyan
+                    super::ACCENT
                 } else {
-                    Color::DarkGray
+                    super::BORDER
                 }
             );
             let screen = draw(&app, 180, 24);
@@ -1572,6 +1623,108 @@ mod tests {
                 assert!(footer.contains(key));
             }
         }
+    }
+
+    #[test]
+    fn explicit_background_covers_empty_cells_borders_and_responsive_regions() {
+        use crate::app::Focus;
+
+        let mut app = App::new(24);
+        app.update(Msg::Game(Box::new(game())));
+        for (width, height, focus) in [
+            (32, 12, Focus::List),
+            (60, 24, Focus::Detail),
+            (99, 24, Focus::List),
+            (100, 24, Focus::Detail),
+            (180, 30, Focus::List),
+        ] {
+            app.update(Msg::Resize(width, height));
+            app.focus = focus;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| render(&app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_background(buffer, &format!("{width}x{height} {focus:?}"));
+
+            let areas = crate::layout::areas(buffer.area);
+            for (label, point) in [
+                ("header", (areas.header.right() - 1, areas.header.y)),
+                ("panel border", (areas.list.x, areas.list.y)),
+                (
+                    "panel empty row",
+                    (areas.list.x + 1, areas.list.bottom() - 2),
+                ),
+                ("footer", (areas.help.right() - 1, areas.help.bottom() - 1)),
+            ] {
+                assert_eq!(buffer[point].bg, super::BACKGROUND, "{label} at {width}");
+            }
+            assert_ne!(buffer[(areas.list.x, areas.list.y)].symbol(), " ");
+            assert_eq!(
+                buffer[(areas.list.x + 1, areas.list.bottom() - 2)].symbol(),
+                " ",
+                "expected an empty list cell at {width}"
+            );
+
+            if width >= crate::layout::SPLIT_WIDTH {
+                assert_eq!(
+                    buffer[(areas.detail.x, areas.detail.y)].bg,
+                    super::BACKGROUND,
+                    "detail border at {width}"
+                );
+                assert_eq!(
+                    buffer[(areas.detail.right() - 2, areas.detail.bottom() - 2)].bg,
+                    super::BACKGROUND,
+                    "empty detail cell at {width}"
+                );
+            }
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(31, 12)).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_background(buffer, "minimum-size warning");
+        assert_eq!(buffer[(0, 0)].fg, super::WARNING);
+        assert_eq!(buffer[(30, 11)].bg, super::BACKGROUND);
+    }
+
+    #[test]
+    fn essential_text_structure_state_and_selection_keep_contrast() {
+        let mut app = App::new(24);
+        app.update(Msg::Game(Box::new(game())));
+        app.update(Msg::Problem("unreadable library".into()));
+        app.update(Msg::Resize(120, 24));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let areas = crate::layout::areas(buffer.area);
+
+        assert_ne!(super::FOREGROUND, super::BACKGROUND);
+        assert_ne!(super::MUTED, super::BACKGROUND);
+        assert_ne!(super::ACCENT, super::BACKGROUND);
+        assert_ne!(super::BORDER, super::BACKGROUND);
+        assert_ne!(super::ERROR, super::BACKGROUND);
+        assert_ne!(super::WARNING, super::BACKGROUND);
+        assert_eq!(buffer[(areas.list.x, areas.list.y)].fg, super::ACCENT);
+        assert_eq!(buffer[(areas.detail.x, areas.detail.y)].fg, super::BORDER);
+
+        let row = ((areas.list.y + 1)..areas.list.bottom() - 1)
+            .find(|&y| {
+                (areas.list.x + 1..areas.list.right() - 1)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("Team Fortress 2")
+            })
+            .expect("selected entry row");
+        let selected = &buffer[(areas.list.x + 1, row)];
+        assert_eq!(selected.fg, super::FOREGROUND);
+        assert_eq!(selected.bg, super::BACKGROUND);
+        assert!(selected.modifier.contains(Modifier::REVERSED));
+
+        let header = (0..120)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        let problem_x = u16::try_from(header.find("Problems").unwrap()).unwrap();
+        assert_eq!(buffer[(problem_x, 0)].fg, super::ERROR);
+        assert_eq!(buffer[(problem_x, 0)].bg, super::BACKGROUND);
     }
 
     #[test]
