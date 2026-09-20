@@ -409,7 +409,7 @@ fn a_game_is_printed_with_its_id_its_title_and_the_directory_it_lives_in() {
     let mut out = String::new();
     render(&mut out, &[dota()]);
 
-    assert!(out.contains("570      Dota 2"), "got {out:?}");
+    assert!(out.contains("570  Dota 2  ["), "got {out:?}");
     assert!(
         out.contains("/steam/steamapps/common/dota 2 beta"),
         "got {out:?}"
@@ -444,11 +444,11 @@ fn a_game_says_which_launcher_supplied_it_when_more_than_one_could_have() {
     render_named(&mut out, &[dota(), hades()], true);
 
     assert!(
-        out.contains("origin  Steam"),
+        out.contains("Source: Steam"),
         "the Steam game names Steam, got {out:?}"
     );
     assert!(
-        out.contains("origin  Heroic / GOG"),
+        out.contains("Source: Heroic / GOG"),
         "and the Heroic game names its backend, not just Heroic: {out:?}"
     );
 }
@@ -462,7 +462,7 @@ fn the_narrower_listing_does_not_repeat_the_one_launcher_it_was_asked_about() {
     render(&mut out, &[dota()]);
 
     assert!(
-        !out.contains("origin"),
+        !out.contains("Source:"),
         "a single-launcher listing names no origins, got {out:?}"
     );
 }
@@ -476,7 +476,7 @@ fn a_game_with_no_proton_prefix_still_gets_a_row_saying_so() {
     let mut out = String::new();
     render(&mut out, &[dota()]);
 
-    assert!(out.contains("nvapi"), "got {out:?}");
+    assert!(out.contains("NVAPI:"), "got {out:?}");
     assert!(
         out.contains("not determined"),
         "the row must not read as an answer, got {out:?}"
@@ -758,7 +758,7 @@ fn an_install_that_argues_nothing_is_printed_under_the_ones_that_argue_something
     render(&mut out, &[runtime, game]);
 
     let runtime_at = out.find("Proton Experimental").expect("both are listed");
-    let game_at = out.find("Dota 2\n").expect("both are listed");
+    let game_at = out.find("Dota 2  [").expect("both are listed");
     assert!(game_at < runtime_at, "the evidence goes first, got:\n{out}");
     assert!(
         out.contains("nothing here carries evidence of being a game"),
@@ -785,7 +785,7 @@ fn an_install_that_argues_nothing_is_demoted_on_both_surfaces_or_neither() {
 
     let rendered = render_both(&[runtime, game], false);
 
-    let text_game = rendered.text.find("Dota 2\n").expect("both are listed");
+    let text_game = rendered.text.find("Dota 2  [").expect("both are listed");
     let text_runtime = rendered
         .text
         .find("Proton Experimental")
@@ -836,8 +836,8 @@ fn a_demoted_game_keeps_every_row_it_would_have_had_further_up() {
 
     render_named(&mut out, &[runtime], true);
 
-    assert!(out.contains("origin  Steam"), "got:\n{out}");
-    assert!(out.contains("nvapi"), "got:\n{out}");
+    assert!(out.contains("Source: Steam"), "got:\n{out}");
+    assert!(out.contains("NVAPI:"), "got:\n{out}");
 }
 
 #[test]
@@ -856,7 +856,7 @@ fn a_directory_that_could_not_be_read_keeps_its_place_among_the_games() {
 
     render(&mut out, &[runtime, dota()]);
 
-    let missing_at = out.find("Dota 2\n").expect("both are listed");
+    let missing_at = out.find("Dota 2  [").expect("both are listed");
     let runtime_at = out.find("Proton Experimental").expect("both are listed");
     assert!(
         missing_at < runtime_at,
@@ -915,8 +915,8 @@ fn the_games_of_one_library_keep_the_order_their_launcher_gave_them() {
 
     render(&mut out, &[first, second]);
 
-    let dota_at = out.find("Dota 2\n").expect("both are listed");
-    let hades_at = out.find("Hades\n").expect("both are listed");
+    let dota_at = out.find("Dota 2  [").expect("both are listed");
+    let hades_at = out.find("Hades  [").expect("both are listed");
     assert!(dota_at < hades_at, "got:\n{out}");
 }
 
@@ -1030,17 +1030,16 @@ fn golden_scan() -> Listing {
 /// names the difference, which is better than a test that quietly stopped
 /// checking the wrapping.
 const GOLDEN_TEXT: &str = concat!(
-    "/dxray-golden\n",
+    "golden [/dxray-golden]\n",
     "  note        its index declared no libraries\n",
-    "  library     /dxray-golden\n",
-    "    570      Dota 2\n",
-    "             /dxray-golden/dota 2 beta\n",
-    "             origin  Steam\n",
-    "             best    (directory could not be read: No such file or directory (os\n",
-    "                     error 2))\n",
-    "             nvapi   not determined: /dxray-golden/steamapps/compatdata/570: no\n",
-    "                     compatibility prefix, so this game has not been run under\n",
-    "                     Proton and there is no build to read a policy out of\n",
+    "  Library: /dxray-golden\n",
+    "    ├─ 570  Dota 2  [Evidence unavailable]\n",
+    "    │  Path: ./dota 2 beta\n",
+    "    │  Source: Steam\n",
+    "    │  Exec: (directory could not be read: No such file or directory (os error 2))\n",
+    "    │  Status: installation could not be read: No such file or directory (os error 2)\n",
+    "    │  NVAPI: not determined: /dxray-golden/steamapps/compatdata/570: no compatibility prefix, so this game has not been run under Proton and there is no build to read a policy out of\n",
+    "    │  Scope: static policy only; runtime use is not established\n",
     "  note        a cache record has no install_path\n",
     "  unreadable  appmanifest_999.acf: unreadable\n",
 );
@@ -1242,8 +1241,8 @@ fn a_games_rows_reach_the_json_whole_where_the_terminal_had_to_fold_them() {
         rendered.json
     );
     assert!(
-        !rendered.text.contains(sentence),
-        "and the terminal is the one that had to fold it, got:\n{}",
+        rendered.text.contains(sentence),
+        "the tree keeps each diagnostic whole, got:\n{}",
         rendered.text
     );
     for label in ["origin", "best", "nvapi"] {

@@ -66,13 +66,8 @@ fn a_steam_install_is_listed_with_its_library_and_the_games_in_it() {
     assert!(text.contains("570"), "the appid is listed, got:\n{text}");
     assert!(text.contains("Dota 2"), "the title is listed, got:\n{text}");
     assert!(
-        text.contains(
-            &root
-                .join("steamapps/common/dota 2 beta")
-                .display()
-                .to_string()
-        ),
-        "the install directory is resolved, not left as a bare name, got:\n{text}"
+        text.contains("Path: ./steamapps/common/dota 2 beta"),
+        "the install directory is resolved relative to the named library, got:\n{text}"
     );
     assert_eq!(out.status.code(), Some(0), "a clean scan exits 0");
 }

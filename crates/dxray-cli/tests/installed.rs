@@ -38,7 +38,8 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
     for command in ["installed", "steam"] {
         let legacy = dxray_with_home(home.path(), [command]);
         let json = dxray_with_home(home.path(), [command, "--json"]);
-        assert!(!stdout_of(&legacy).contains("Entry:"));
+        assert!(stdout_of(&legacy).contains("Library:"));
+        assert!(stdout_of(&legacy).contains("├─"));
         for view in ["compact", "full"] {
             let out = dxray_with_home(home.path(), [command, "--view", view]);
             let text = stdout_of(&out);
@@ -47,26 +48,24 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
             assert!(text.contains("Direct3D 11"));
             assert!(text.contains("DLSS"));
             for token in [
-                "Entry: Hades",
+                "├─ 570  Hades",
                 "Steam",
-                "AppID",
                 "570",
-                "renderer",
-                "static",
+                "Direct3D 11",
                 "unreadable",
                 "dota 2 beta",
             ] {
                 assert!(text.contains(token), "missing {token}: {text}");
             }
             if command == "installed" {
-                assert_eq!(text.matches("Entry: Hades").count(), 2);
+                assert_eq!(text.matches("Hades  [").count(), 2);
                 for token in ["Heroic", "1207658691", "Games/Hades", "note"] {
                     assert!(text.contains(token), "missing {token}: {text}");
                 }
             }
             if view == "full" {
                 assert!(text.contains("ranked"));
-                assert!(text.contains("launcher root"));
+                assert!(text.contains("Launcher root"));
             } else {
                 assert_compact_inventory(text, stdout_of(&legacy), command);
             }
@@ -99,23 +98,21 @@ fn assert_compact_inventory(text: &str, legacy: &str, command: &str) {
     }
     let entries: Vec<_> = text
         .lines()
-        .filter(|line| line.starts_with("Entry: Hades"))
+        .filter(|line| line.contains("Hades  ["))
         .collect();
     assert_eq!(entries.len(), if command == "installed" { 2 } else { 1 });
-    assert!(
-        entries
-            .iter()
-            .any(|line| line.contains("Steam AppID 570") && line.contains("dota 2 beta"))
-    );
+    assert!(entries.iter().any(|line| line.contains("570  Hades")));
     if command == "installed" {
-        assert!(entries.iter().any(|line| {
-            line.contains("Heroic / GOG ID 1207658691") && line.contains("Games/Hades")
-        }));
-        assert!(entries.iter().any(|line| {
-            line.contains("Heroic / GOG ID 1207658691")
-                && line.contains(" | /")
-                && line.ends_with("/Games/Hades")
-        }));
+        assert!(
+            entries
+                .iter()
+                .any(|line| { line.contains("1207658691  Hades") })
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|line| { line.contains("1207658691  Hades") })
+        );
         assert!(text.contains("note"));
     }
     assert!(
@@ -151,19 +148,20 @@ fn compact_steam_uses_each_library_header_for_relative_install_paths() {
     let text = stdout_of(&compact);
     let entries: Vec<_> = text
         .lines()
-        .filter(|line| line.starts_with("Entry: Dota 2"))
+        .filter(|line| line.contains("570  Dota 2"))
         .collect();
     assert_eq!(entries.len(), 2, "{text}");
-    assert!(entries.iter().all(|line| {
-        line.contains("Steam AppID 570") && line.ends_with("| ./steamapps/common/dota 2 beta")
-    }));
+    assert!(entries.iter().all(|line| line.contains("570  Dota 2")));
     let first_library = text.find(&root.display().to_string()).unwrap();
-    let first_entry = text.find("Entry: Dota 2").unwrap();
+    let first_entry = text.find("570  Dota 2").unwrap();
     let second_library = text.find(&other.display().to_string()).unwrap();
-    let second_entry = text.rfind("Entry: Dota 2").unwrap();
+    let second_entry = text.rfind("570  Dota 2").unwrap();
     assert!(first_library < first_entry && first_entry < second_library);
     assert!(second_library < second_entry, "{text}");
-    assert!(!text.contains("| /steamapps/common/dota 2 beta"));
+    assert_eq!(
+        text.matches("Path: ./steamapps/common/dota 2 beta").count(),
+        2
+    );
 
     let legacy = dxray_with_home(home.path(), ["steam"]);
     let full = dxray_with_home(home.path(), ["steam", "--view", "full"]);
@@ -193,10 +191,10 @@ fn inventory_views_distinguish_empty_and_unavailable_installs() {
             assert!(text.contains("installation could not be read"));
             assert!(text.contains("Proton Experimental"));
             assert!(text.contains("Dota 2"));
-            assert!(text.contains("not determined statically"));
+            assert!(text.contains("No executable") || text.contains("Evidence unavailable"));
             if view == "compact" {
-                assert!(text.contains("no static game evidence"));
-                assert!(text.contains("evidence unavailable"));
+                assert!(text.contains("Installations without game evidence"));
+                assert!(text.contains("Evidence unavailable"));
                 assert!(!text.contains("Tools & Runtimes"));
                 assert!(!text.contains("tool/runtime"));
             }
@@ -301,11 +299,11 @@ fn every_launcher_on_the_machine_is_listed_and_each_game_says_which_one() {
     assert!(text.contains("Dota 2"), "got:\n{text}");
     assert!(text.contains("Hades"), "got:\n{text}");
     assert!(
-        text.contains("origin  Steam"),
+        text.contains("Source: Steam"),
         "a game has to say where it came from, got:\n{text}"
     );
     assert!(
-        text.contains("origin  Heroic / GOG"),
+        text.contains("Source: Heroic / GOG"),
         "and a Heroic game names the shop, not just the launcher, got:\n{text}"
     );
 }

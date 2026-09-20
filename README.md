@@ -96,13 +96,15 @@ Without `--view`, reports use the standard text layout. Invalid
 options exit 2 before scanning. Direct paths do not provide launcher
 or Proton context, so these reports mark the static NVAPI policy as not assessed.
 
-Inventory views identify entries by launcher, launcher ID (and Steam AppID when
-available) and installation path. In compact inventories, installation paths
-inside a library are shown relative to its absolute library heading; paths
-outside it remain absolute. Compact keeps search caveats visible; full adds
+Inventory reports are grouped as launcher, library and game. Each game header
+keeps its launcher ID and a static renderer result; the rows below it carry the
+path, selected executable, Proton/NVAPI policy and any caveats. Installations
+read successfully but with no game evidence are grouped explicitly rather than
+hidden. Paths inside a library are relative to that library; externally managed
+paths remain absolute. Compact keeps the essential caveats visible; full adds
 library and launcher roots, the complete executable ranking and static evidence.
 NVAPI findings describe the available static Proton policy, not runtime behavior.
-Notes and problems remain visible in both views, with the existing exit codes.
+Notes and problems remain visible in every view, with the existing exit codes.
 
 ```sh
 dxray installed --view compact

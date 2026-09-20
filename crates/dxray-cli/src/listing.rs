@@ -87,7 +87,7 @@ use std::path::{Component, Path, PathBuf};
 use dxray_core::proton::Builds;
 use dxray_core::{Catalogue, Game, Launcher, Origin};
 
-use crate::record::{display_path, push_optional, push_quoted, push_string};
+use crate::record::{Record, display_path, push_optional, push_quoted, push_string};
 
 /// The listing, and whether anything went wrong while producing it.
 ///
@@ -651,7 +651,7 @@ impl dxray_core::Visitor for Render {
     fn root(&mut self, origin: Origin, root: &Path) -> ControlFlow<()> {
         self.listing.roots += 1;
         self.install = Some(root.to_path_buf());
-        let _ = writeln!(self.listing.text, "{}", root.display());
+        let _ = writeln!(self.listing.text, "{} [{}]", origin.label(), root.display());
 
         let json = &mut self.listing.json;
         json.push_str("{\"kind\":\"install\",");
@@ -697,11 +697,7 @@ impl dxray_core::Visitor for Render {
 
     fn library(&mut self, origin: Origin, library: &Path) -> ControlFlow<()> {
         self.listing.libraries += 1;
-        row(
-            &mut self.listing.text,
-            "library",
-            &library.display().to_string(),
-        );
+        let _ = writeln!(self.listing.text, "  Library: {}", library.display());
 
         let json = &mut self.listing.json;
         json.push_str("{\"kind\":\"library\",");
@@ -910,9 +906,15 @@ fn render_games(
         // One call, shared with the terminal browser, so that the facts
         // established about a game cannot depend on which surface asked.
         let facts = dxray_core::inspect(game, place.library, builds);
-        let human = (presentation != crate::report::Presentation::Standard)
-            .then(|| inventory_entry(game, place, &facts, presentation));
-        let best = crate::game::best_rows(&game.install_dir, facts.survey);
+        let dxray_core::inspect::Inspection { survey, nvapi } = facts;
+        let details = tree_facts(
+            &survey,
+            &game.install_dir,
+            game.origin.label(),
+            &nvapi.verdict,
+            presentation,
+        );
+        let best = crate::game::best_rows(&game.install_dir, survey);
         let lacks_evidence = best.lacks_evidence();
 
         // The rows this game gets, decided once and rendered twice. The origin
@@ -929,20 +931,15 @@ fn render_games(
         // Proton ran a game decides the answer — the policy changed direction
         // twice across releases — so a verdict with no build behind it is not
         // checkable by the person reading it.
-        if let Some(script) = &facts.nvapi.script {
+        if let Some(script) = &nvapi.script {
             rows.push(("proton", display_path(script)));
         }
-        rows.push(("nvapi", facts.nvapi.verdict));
+        rows.push(("nvapi", nvapi.verdict.clone()));
 
-        let mut one = Rendered::default();
-        let _ = writeln!(one.text, "    {:<8} {}", game.identity, game.name);
-        let _ = writeln!(one.text, "    {:<8} {}", "", game.install_dir.display());
-        for (label, value) in &rows {
-            game_row(&mut one.text, label, value);
-        }
-        if let Some(human) = human {
-            one.text = human;
-        }
+        let mut one = Rendered {
+            text: tree_entry(game, place, &nvapi, &details, &rows, presentation),
+            json: String::new(),
+        };
         push_game(
             &mut one.json,
             game,
@@ -970,10 +967,16 @@ fn render_games(
         text.push_str(&one.text);
         json.push_str(&one.json);
     }
-    sink.text.push_str(&demoted.text);
+    if !demoted.text.is_empty() {
+        sink.text
+            .push_str("    Installations without game evidence:\n");
+        sink.text.push_str(&demoted.text);
+    }
     sink.json.push_str(&demoted.json);
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn inventory_entry(
     game: &Game,
     place: Place<'_>,
@@ -1086,6 +1089,8 @@ fn compact_install_path(install: &Path, library: &Path) -> String {
     display_path(install)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn compact_entry(game: &Game, library: &Path, facts: &dxray_core::inspect::Inspection) -> String {
     let mut out = format!(
         "\nEntry: {} | {} {} {} | {}\n",
@@ -1143,6 +1148,199 @@ fn compact_entry(game: &Game, library: &Path, facts: &dxray_core::inspect::Inspe
         }
     }
     out
+}
+
+fn tree_entry(
+    game: &Game,
+    place: Place<'_>,
+    nvapi: &dxray_core::proton::Answer,
+    details: &TreeFacts,
+    rows: &[(&str, String)],
+    presentation: crate::report::Presentation,
+) -> String {
+    use crate::report::Presentation;
+
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "    ├─ {}  {}  [{}]",
+        game.identity, game.name, details.result
+    );
+
+    let path = if presentation == Presentation::Full {
+        display_path(&game.install_dir)
+    } else {
+        compact_install_path(&game.install_dir, place.library)
+    };
+    tree_row(&mut out, "Path", &path);
+
+    if presentation != Presentation::Compact {
+        for (label, value) in rows {
+            if matches!(*label, "proton" | "nvapi") {
+                continue;
+            }
+            tree_row(&mut out, &tree_label(label), value);
+        }
+    }
+
+    match &details.survey_error {
+        None => {
+            if details.result == "No executable" {
+                tree_row(&mut out, "Status", "no executable found");
+            }
+            if presentation == Presentation::Compact && details.incomplete {
+                tree_row(&mut out, "Status", "scan incomplete");
+            }
+            if details.carries_evidence == Some(false) {
+                tree_row(
+                    &mut out,
+                    "Status",
+                    "no static evidence that this install is a game",
+                );
+            }
+            if presentation != Presentation::Full && !details.features.is_empty() {
+                tree_row(&mut out, "Features", &details.features.join(", "));
+            }
+            if presentation == Presentation::Full {
+                tree_row(&mut out, "Library", &display_path(place.library));
+                if let Some(root) = place.install {
+                    tree_row(&mut out, "Launcher root", &display_path(root));
+                }
+                if let Some(report) = &details.full_report {
+                    tree_block(&mut out, report);
+                }
+                if let Some(ranking) = &details.full_ranking {
+                    tree_block(&mut out, ranking);
+                }
+            }
+        }
+        Some(error) => tree_row(&mut out, "Status", error),
+    }
+
+    if let Some(script) = &nvapi.script {
+        let script = if presentation == Presentation::Full {
+            display_path(script)
+        } else {
+            match (
+                script.parent().and_then(Path::file_name),
+                script.file_name(),
+            ) {
+                (Some(parent), Some(file)) => {
+                    format!("{}/{}", parent.to_string_lossy(), file.to_string_lossy())
+                }
+                _ => display_path(script),
+            }
+        };
+        tree_row(&mut out, "Proton", &script);
+    }
+    if presentation != Presentation::Full {
+        tree_row(&mut out, "NVAPI", &nvapi.verdict);
+    }
+
+    if presentation != Presentation::Compact {
+        tree_row(
+            &mut out,
+            "Scope",
+            "static policy only; runtime use is not established",
+        );
+    }
+    out
+}
+
+struct TreeFacts {
+    result: String,
+    features: Vec<String>,
+    carries_evidence: Option<bool>,
+    incomplete: bool,
+    survey_error: Option<String>,
+    full_report: Option<String>,
+    full_ranking: Option<String>,
+}
+
+fn tree_facts(
+    survey: &std::io::Result<dxray_core::Survey>,
+    install_dir: &Path,
+    origin: &str,
+    nvapi: &str,
+    presentation: crate::report::Presentation,
+) -> TreeFacts {
+    use crate::report::Presentation;
+
+    let survey = match survey {
+        Ok(survey) => survey,
+        Err(error) => {
+            return TreeFacts {
+                result: "Evidence unavailable".to_owned(),
+                features: Vec::new(),
+                carries_evidence: None,
+                incomplete: false,
+                survey_error: Some(format!("installation could not be read: {error}")),
+                full_report: None,
+                full_ranking: None,
+            };
+        }
+    };
+    let Some(candidate) = survey.best() else {
+        return TreeFacts {
+            result: "No executable".to_owned(),
+            features: Vec::new(),
+            carries_evidence: Some(survey.has_evidence()),
+            incomplete: survey.is_incomplete(),
+            survey_error: None,
+            full_report: None,
+            full_ranking: None,
+        };
+    };
+    let record = Record::read(&candidate.path);
+    let result = if record.error.is_some() {
+        "Evidence unavailable".to_owned()
+    } else if record.verdict.renderers.is_empty() {
+        "No API determined".to_owned()
+    } else {
+        record.verdict.headline()
+    };
+    let features = record
+        .verdict
+        .features
+        .iter()
+        .map(|feature| feature.name.clone())
+        .collect();
+    let full_report = (presentation == Presentation::Full).then(|| {
+        crate::report::present_with_context(&record, Presentation::Full, Some((origin, nvapi)))
+    });
+    let full_ranking = (presentation == Presentation::Full)
+        .then(|| crate::game::ranking_paths(install_dir, survey, true));
+    TreeFacts {
+        result,
+        features,
+        carries_evidence: Some(survey.has_evidence()),
+        incomplete: survey.is_incomplete(),
+        survey_error: None,
+        full_report,
+        full_ranking,
+    }
+}
+
+fn tree_label(label: &str) -> String {
+    match label {
+        "best" => "Exec".to_owned(),
+        "origin" => "Source".to_owned(),
+        "proton" => "Proton".to_owned(),
+        "nvapi" => "NVAPI".to_owned(),
+        "note" => "Note".to_owned(),
+        "unread" => "Unread".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn tree_row(out: &mut String, label: &str, value: &str) {
+    let _ = writeln!(out, "    │  {label}: {value}");
+}
+
+fn tree_block(out: &mut String, block: &str) {
+    for line in block.lines().filter(|line| !line.is_empty()) {
+        let _ = writeln!(out, "    │  {line}");
+    }
 }
 
 /// The two renderings of one library's games, and the caveat list they share.
@@ -1281,6 +1479,8 @@ fn push_place(out: &mut String, install: Option<&Path>, library: Option<&Path>) 
 }
 
 /// One labelled row under a game, wrapped under the label.
+#[cfg(test)]
+#[allow(dead_code)]
 fn game_row(out: &mut String, label: &str, value: &str) {
     let _ = write!(out, "    {:<8} {label:<7} ", "");
     crate::wrap::prose(out, GAME_INDENT, GAME_INDENT, value);
@@ -1288,6 +1488,8 @@ fn game_row(out: &mut String, label: &str, value: &str) {
 
 /// Where a game's own rows start: four spaces, the eight-wide identity column,
 /// a space, and a seven-wide label.
+#[cfg(test)]
+#[allow(dead_code)]
 const GAME_INDENT: usize = 4 + 8 + 1 + 7 + 1;
 
 /// The message for a machine where none of `launchers` was found.
