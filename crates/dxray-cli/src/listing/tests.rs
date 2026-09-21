@@ -597,6 +597,14 @@ impl Launcher for Fake {
     }
 }
 
+fn inventory_json_rows(launchers: &[&dyn Launcher]) -> Vec<serde_json::Value> {
+    scan(launchers)
+        .json()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("JSONL row"))
+        .collect()
+}
+
 #[test]
 fn listing_json_preserves_the_core_inventory_contract() {
     let steam_library = PathBuf::from("/dxray-cli-contract/steam");
@@ -625,9 +633,10 @@ fn listing_json_preserves_the_core_inventory_contract() {
     };
     let launchers: [&dyn Launcher; 2] = [&steam, &heroic];
 
-    let expected: std::collections::HashSet<_> = dxray_core::Inventory::collect(&launchers)
+    let inventory = dxray_core::Inventory::collect(&launchers);
+    let expected_entries: std::collections::HashSet<_> = inventory
         .entries
-        .into_iter()
+        .iter()
         .map(|entry| {
             (
                 entry.game.identity.to_string(),
@@ -637,10 +646,30 @@ fn listing_json_preserves_the_core_inventory_contract() {
             )
         })
         .collect();
-    let actual: std::collections::HashSet<_> = scan(&launchers)
-        .json()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSONL row"))
+    let expected_roots: std::collections::HashSet<_> = inventory
+        .roots
+        .iter()
+        .map(|root| {
+            (
+                root.origin.key().to_owned(),
+                root.path.display().to_string(),
+            )
+        })
+        .collect();
+    let expected_libraries: std::collections::HashSet<_> = inventory
+        .libraries
+        .iter()
+        .map(|library| {
+            (
+                library.origin.key().to_owned(),
+                library.root.as_ref().map(|path| path.display().to_string()),
+                library.path.display().to_string(),
+            )
+        })
+        .collect();
+    let rows = inventory_json_rows(&launchers);
+    let actual_entries: std::collections::HashSet<_> = rows
+        .iter()
         .filter(|row| row["kind"] == "game")
         .map(|row| {
             (
@@ -651,11 +680,34 @@ fn listing_json_preserves_the_core_inventory_contract() {
             )
         })
         .collect();
+    let actual_roots: std::collections::HashSet<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "install")
+        .map(|row| {
+            (
+                row["origin"].as_str().expect("origin").to_owned(),
+                row["path"].as_str().expect("path").to_owned(),
+            )
+        })
+        .collect();
+    let actual_libraries: std::collections::HashSet<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "library")
+        .map(|row| {
+            (
+                row["origin"].as_str().expect("origin").to_owned(),
+                row["install"].as_str().map(ToOwned::to_owned),
+                row["path"].as_str().expect("path").to_owned(),
+            )
+        })
+        .collect();
 
     assert_eq!(
-        actual, expected,
+        actual_entries, expected_entries,
         "CLI JSON must preserve the core inventory contract"
     );
+    assert_eq!(actual_roots, expected_roots);
+    assert_eq!(actual_libraries, expected_libraries);
 }
 
 #[test]

@@ -669,7 +669,38 @@ fn inventory_collects_the_identity_origin_and_library_from_every_launcher() {
 
     let inventory = super::Inventory::collect(&[&steam, &heroic]);
 
+    assert_eq!(
+        inventory.roots,
+        [
+            super::InventoryRoot {
+                origin: crate::steam::ORIGIN,
+                path: steam_library.clone(),
+            },
+            super::InventoryRoot {
+                origin: crate::heroic::ORIGIN,
+                path: heroic_library.clone(),
+            },
+        ]
+    );
+    assert_eq!(
+        inventory.libraries,
+        [
+            super::InventoryLibrary {
+                origin: crate::steam::ORIGIN,
+                root: Some(steam_library.clone()),
+                path: steam_library.clone(),
+            },
+            super::InventoryLibrary {
+                origin: crate::heroic::ORIGIN,
+                root: Some(heroic_library.clone()),
+                path: heroic_library.clone(),
+            },
+        ]
+    );
+    assert!(inventory.notes.is_empty());
+    assert!(inventory.problems.is_empty());
     assert_eq!(inventory.entries.len(), 2);
+    assert_eq!(inventory.entries[0].root, Some(steam_library.clone()));
     assert_eq!(inventory.entries[0].game.identity, Identity::SteamApp(570));
     assert_eq!(inventory.entries[0].game.origin, crate::steam::ORIGIN);
     assert_eq!(inventory.entries[0].library, steam_library);
@@ -678,10 +709,70 @@ fn inventory_collects_the_identity_origin_and_library_from_every_launcher() {
         inventory.entries[1].game.identity,
         Identity::Native("heroic-hades".to_owned())
     );
+    assert_eq!(inventory.entries[1].root, Some(heroic_library.clone()));
     assert_eq!(
         inventory.entries[1].game.origin,
         Origin::new("heroic", "Heroic / GOG")
     );
     assert_eq!(inventory.entries[1].library, heroic_library);
     assert_eq!(inventory.entries[1].game.install_dir, heroic_install);
+}
+
+struct ReportingFixture {
+    root: PathBuf,
+}
+
+impl Launcher for ReportingFixture {
+    fn origin(&self) -> Origin {
+        Origin::new("fixture", "Fixture")
+    }
+
+    fn roots(&self) -> Vec<PathBuf> {
+        vec![self.root.clone()]
+    }
+
+    fn candidate_roots(&self) -> Vec<PathBuf> {
+        vec![self.root.clone()]
+    }
+
+    fn libraries(&self, root: &Path) -> Libraries {
+        Libraries {
+            paths: vec![root.join("library")],
+            notes: vec!["index caveat".to_owned()],
+            problems: vec!["index problem".to_owned()],
+        }
+    }
+
+    fn games(&self, _library: &Path) -> Catalogue {
+        Catalogue {
+            notes: vec!["catalogue caveat".to_owned()],
+            problems: vec!["catalogue problem".to_owned()],
+            ..Catalogue::default()
+        }
+    }
+}
+
+#[test]
+fn inventory_keeps_root_and_catalogue_diagnostics_at_their_real_locations() {
+    let fixture = ReportingFixture {
+        root: PathBuf::from("/dxray-inventory-diagnostics"),
+    };
+    let inventory = super::Inventory::collect(&[&fixture]);
+    let library = fixture.root.join("library");
+
+    assert_eq!(inventory.notes.len(), 2);
+    assert_eq!(inventory.notes[0].root, Some(fixture.root.clone()));
+    assert_eq!(inventory.notes[0].library, None);
+    assert_eq!(inventory.notes[0].message, "index caveat");
+    assert_eq!(inventory.notes[1].root, Some(fixture.root.clone()));
+    assert_eq!(inventory.notes[1].library, Some(library.clone()));
+    assert_eq!(inventory.notes[1].message, "catalogue caveat");
+
+    assert_eq!(inventory.problems.len(), 2);
+    assert_eq!(inventory.problems[0].root, Some(fixture.root.clone()));
+    assert_eq!(inventory.problems[0].library, None);
+    assert_eq!(inventory.problems[0].message, "index problem");
+    assert_eq!(inventory.problems[1].root, Some(fixture.root));
+    assert_eq!(inventory.problems[1].library, Some(library));
+    assert_eq!(inventory.problems[1].message, "catalogue problem");
 }

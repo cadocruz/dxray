@@ -702,22 +702,58 @@ mod tests {
         };
 
         let launchers: [&dyn dxray_core::Launcher; 2] = [&steam, &heroic];
-        let expected: HashSet<_> = dxray_core::Inventory::collect(&launchers)
+        let inventory = dxray_core::Inventory::collect(&launchers);
+        let expected_entries: HashSet<_> = inventory
             .entries
-            .into_iter()
-            .map(|entry| (entry.game.identity, entry.game.origin, entry.library))
+            .iter()
+            .map(|entry| {
+                (
+                    entry.game.identity.clone(),
+                    entry.game.origin,
+                    entry.library.clone(),
+                )
+            })
             .collect();
-        let found: HashSet<_> = drain(&launchers)
+        let expected_roots: HashSet<_> = inventory
+            .roots
+            .iter()
+            .map(|root| root.path.clone())
+            .collect();
+        let expected_libraries: HashSet<_> = inventory
+            .libraries
+            .iter()
+            .map(|library| library.path.clone())
+            .collect();
+        let messages = drain(&launchers);
+        let found_entries: HashSet<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Msg::Game(entry) => {
+                    Some((entry.identity.clone(), entry.origin, entry.library.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let found_roots: HashSet<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Msg::Root(path) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        let found_libraries: HashSet<_> = messages
             .into_iter()
             .filter_map(|message| match message {
-                Msg::Game(entry) => Some((entry.identity, entry.origin, entry.library)),
+                Msg::Library(path) => Some(path),
                 _ => None,
             })
             .collect();
 
         assert_eq!(
-            found, expected,
+            found_entries, expected_entries,
             "TUI entries must preserve the core inventory contract"
         );
+        assert_eq!(found_roots, expected_roots);
+        assert_eq!(found_libraries, expected_libraries);
     }
 }

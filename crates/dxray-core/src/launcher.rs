@@ -216,8 +216,38 @@ pub struct Game {
 /// present the same inventory without reconstructing that relationship.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InventoryEntry {
+    /// The launcher installation that led to this game, when the collector was
+    /// driven through [`walk`].
+    pub root: Option<PathBuf>,
     pub game: Game,
     pub library: PathBuf,
+}
+
+/// One launcher installation visited by an inventory walk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryRoot {
+    pub origin: Origin,
+    pub path: PathBuf,
+}
+
+/// One library visited under a launcher installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryLibrary {
+    pub origin: Origin,
+    /// `None` preserves an out-of-order direct [`Visitor`] call rather than
+    /// inventing a launcher installation for it.
+    pub root: Option<PathBuf>,
+    pub path: PathBuf,
+}
+
+/// A non-game fact reported during an inventory walk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryDiagnostic {
+    pub origin: Origin,
+    pub root: Option<PathBuf>,
+    /// Root-index diagnostics have no library; catalogue diagnostics do.
+    pub library: Option<PathBuf>,
+    pub message: String,
 }
 
 /// A completed, presentation-neutral inventory.
@@ -229,7 +259,12 @@ pub struct InventoryEntry {
 /// rather than either presentation.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Inventory {
+    pub roots: Vec<InventoryRoot>,
+    pub libraries: Vec<InventoryLibrary>,
+    pub notes: Vec<InventoryDiagnostic>,
+    pub problems: Vec<InventoryDiagnostic>,
     pub entries: Vec<InventoryEntry>,
+    current_root: Option<PathBuf>,
 }
 
 impl Inventory {
@@ -421,32 +456,81 @@ pub trait Visitor {
 }
 
 impl Visitor for Inventory {
-    fn root(&mut self, _origin: Origin, _root: &Path) -> ControlFlow<()> {
+    fn root(&mut self, origin: Origin, root: &Path) -> ControlFlow<()> {
+        let root = root.to_path_buf();
+        self.roots.push(InventoryRoot {
+            origin,
+            path: root.clone(),
+        });
+        self.current_root = Some(root);
         ControlFlow::Continue(())
     }
 
-    fn note(&mut self, _origin: Origin, _note: &str) -> ControlFlow<()> {
+    fn note(&mut self, origin: Origin, note: &str) -> ControlFlow<()> {
+        self.notes.push(InventoryDiagnostic {
+            origin,
+            root: self.current_root.clone(),
+            library: None,
+            message: note.to_owned(),
+        });
         ControlFlow::Continue(())
     }
 
-    fn problem(&mut self, _origin: Origin, _problem: &str) -> ControlFlow<()> {
+    fn problem(&mut self, origin: Origin, problem: &str) -> ControlFlow<()> {
+        self.problems.push(InventoryDiagnostic {
+            origin,
+            root: self.current_root.clone(),
+            library: None,
+            message: problem.to_owned(),
+        });
         ControlFlow::Continue(())
     }
 
-    fn library(&mut self, _origin: Origin, _library: &Path) -> ControlFlow<()> {
+    fn library(&mut self, origin: Origin, library: &Path) -> ControlFlow<()> {
+        self.libraries.push(InventoryLibrary {
+            origin,
+            root: self.current_root.clone(),
+            path: library.to_path_buf(),
+        });
         ControlFlow::Continue(())
     }
 
     fn catalogue(
         &mut self,
-        _launcher: &dyn Launcher,
+        launcher: &dyn Launcher,
         library: &Path,
         catalogue: Catalogue,
     ) -> ControlFlow<()> {
+        let root = self.current_root.clone();
+        let library = library.to_path_buf();
+        let origin = launcher.origin();
+        self.notes.extend(
+            catalogue
+                .notes
+                .into_iter()
+                .map(|message| InventoryDiagnostic {
+                    origin,
+                    root: root.clone(),
+                    library: Some(library.clone()),
+                    message,
+                }),
+        );
+        self.problems.extend(
+            catalogue
+                .problems
+                .into_iter()
+                .map(|message| InventoryDiagnostic {
+                    origin,
+                    root: root.clone(),
+                    library: Some(library.clone()),
+                    message,
+                }),
+        );
         self.entries
             .extend(catalogue.games.into_iter().map(|game| InventoryEntry {
+                root: root.clone(),
                 game,
-                library: library.to_path_buf(),
+                library: library.clone(),
             }));
         ControlFlow::Continue(())
     }

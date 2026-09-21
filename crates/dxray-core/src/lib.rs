@@ -64,8 +64,8 @@ pub use game::{Candidate, Reason, Survey};
 pub use inspect::{Inspection, inspect};
 pub use install::candidates;
 pub use launcher::{
-    Catalogue, Game, Identity, Inventory, InventoryEntry, Launcher, Libraries, Origin, Visitor,
-    walk,
+    Catalogue, Game, Identity, Inventory, InventoryDiagnostic, InventoryEntry, InventoryLibrary,
+    InventoryRoot, Launcher, Libraries, Origin, Visitor, walk,
 };
 
 #[cfg(test)]
