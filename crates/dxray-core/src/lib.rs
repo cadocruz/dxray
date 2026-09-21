@@ -63,7 +63,10 @@ pub use evidence::LibraryCache;
 pub use game::{Candidate, Reason, Survey};
 pub use inspect::{Inspection, inspect};
 pub use install::candidates;
-pub use launcher::{Catalogue, Game, Identity, Launcher, Libraries, Origin, Visitor, walk};
+pub use launcher::{
+    Catalogue, Game, Identity, Inventory, InventoryEntry, Launcher, Libraries, Origin, Visitor,
+    walk,
+};
 
 #[cfg(test)]
 mod testutil;

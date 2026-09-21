@@ -208,6 +208,43 @@ pub struct Game {
     pub origin: Origin,
 }
 
+/// One game in a completed launcher inventory.
+///
+/// This is the presentation-neutral result of a full [`walk`].  The game keeps
+/// the identity and origin supplied by its launcher; `library` records the
+/// location that makes Steam's Proton policy meaningful and lets consumers
+/// present the same inventory without reconstructing that relationship.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryEntry {
+    pub game: Game,
+    pub library: PathBuf,
+}
+
+/// A completed, presentation-neutral inventory.
+///
+/// Command-line and terminal consumers normally implement [`Visitor`]
+/// directly: the command line renders as it accumulates and the TUI streams
+/// events while discovery is still in progress.  This collector exists for
+/// callers and tests that need the stable facts produced by the shared walk,
+/// rather than either presentation.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Inventory {
+    pub entries: Vec<InventoryEntry>,
+}
+
+impl Inventory {
+    /// Collect every game delivered by the shared launcher walk.
+    ///
+    /// Unlike a UI visitor this collector never cancels, so a returned value
+    /// always represents the complete traversal of the launchers supplied.
+    #[must_use]
+    pub fn collect(launchers: &[&dyn Launcher]) -> Self {
+        let mut inventory = Self::default();
+        let _ = walk(launchers, &mut inventory);
+        inventory
+    }
+}
+
 /// The libraries inside one launcher root, and everything qualifying that list.
 ///
 /// Three lists rather than a `Result`, because all three can be true at once: a
@@ -381,6 +418,38 @@ pub trait Visitor {
         library: &Path,
         catalogue: Catalogue,
     ) -> ControlFlow<()>;
+}
+
+impl Visitor for Inventory {
+    fn root(&mut self, _origin: Origin, _root: &Path) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
+    fn note(&mut self, _origin: Origin, _note: &str) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
+    fn problem(&mut self, _origin: Origin, _problem: &str) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
+    fn library(&mut self, _origin: Origin, _library: &Path) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
+
+    fn catalogue(
+        &mut self,
+        _launcher: &dyn Launcher,
+        library: &Path,
+        catalogue: Catalogue,
+    ) -> ControlFlow<()> {
+        self.entries
+            .extend(catalogue.games.into_iter().map(|game| InventoryEntry {
+                game,
+                library: library.to_path_buf(),
+            }));
+        ControlFlow::Continue(())
+    }
 }
 
 /// Visits every launcher in `launchers`, every installation of each, and every

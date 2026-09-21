@@ -701,23 +701,23 @@ mod tests {
             catalogue_notes: Vec::new(),
         };
 
-        let found: HashSet<_> = drain(&[&steam, &heroic])
+        let launchers: [&dyn dxray_core::Launcher; 2] = [&steam, &heroic];
+        let expected: HashSet<_> = dxray_core::Inventory::collect(&launchers)
+            .entries
+            .into_iter()
+            .map(|entry| (entry.game.identity, entry.game.origin, entry.library))
+            .collect();
+        let found: HashSet<_> = drain(&launchers)
             .into_iter()
             .filter_map(|message| match message {
-                Msg::Game(entry) => Some(entry.identity),
+                Msg::Game(entry) => Some((entry.identity, entry.origin, entry.library)),
                 _ => None,
             })
             .collect();
-        let expected = HashSet::from([
-            dxray_core::Identity::SteamApp(570),
-            dxray_core::Identity::SteamApp(1_493_710),
-            dxray_core::Identity::Native("epic-game".to_owned()),
-            dxray_core::Identity::Native("gog-game".to_owned()),
-        ]);
 
         assert_eq!(
             found, expected,
-            "TUI and --installed must expose one launcher identity set"
+            "TUI entries must preserve the core inventory contract"
         );
     }
 }

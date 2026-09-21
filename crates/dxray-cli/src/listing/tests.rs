@@ -598,6 +598,67 @@ impl Launcher for Fake {
 }
 
 #[test]
+fn listing_json_preserves_the_core_inventory_contract() {
+    let steam_library = PathBuf::from("/dxray-cli-contract/steam");
+    let heroic_library = PathBuf::from("/dxray-cli-contract/heroic");
+    let steam = Fake {
+        origin: dxray_core::steam::ORIGIN,
+        roots: vec![steam_library.clone()],
+        games: vec![Game {
+            identity: Identity::SteamApp(570),
+            name: "Dota 2".to_owned(),
+            install_dir: steam_library.join("steamapps/common/dota 2 beta"),
+            origin: dxray_core::steam::ORIGIN,
+        }],
+        ..Fake::new("steam")
+    };
+    let heroic = Fake {
+        origin: dxray_core::heroic::ORIGIN,
+        roots: vec![heroic_library.clone()],
+        games: vec![Game {
+            identity: Identity::Native("heroic-hades".to_owned()),
+            name: "Hades".to_owned(),
+            install_dir: PathBuf::from("/games/Hades"),
+            origin: dxray_core::Origin::new("heroic", "Heroic / GOG"),
+        }],
+        ..Fake::new("heroic")
+    };
+    let launchers: [&dyn Launcher; 2] = [&steam, &heroic];
+
+    let expected: std::collections::HashSet<_> = dxray_core::Inventory::collect(&launchers)
+        .entries
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.game.identity.to_string(),
+                entry.game.origin.key().to_owned(),
+                entry.game.install_dir.display().to_string(),
+                entry.library.display().to_string(),
+            )
+        })
+        .collect();
+    let actual: std::collections::HashSet<_> = scan(&launchers)
+        .json()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSONL row"))
+        .filter(|row| row["kind"] == "game")
+        .map(|row| {
+            (
+                row["id"].as_str().expect("id").to_owned(),
+                row["origin"].as_str().expect("origin").to_owned(),
+                row["directory"].as_str().expect("directory").to_owned(),
+                row["library"].as_str().expect("library").to_owned(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        actual, expected,
+        "CLI JSON must preserve the core inventory contract"
+    );
+}
+
+#[test]
 fn a_library_nobody_could_look_inside_is_not_reported_as_an_empty_one() {
     // The two states are not the same state, and only one of them is a
     // statement about what the user owns. "(no games installed)" under a

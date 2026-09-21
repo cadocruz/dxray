@@ -610,3 +610,78 @@ fn every_launcher_in_the_registry_can_say_where_it_looked() {
         );
     }
 }
+
+/// Adapts a real launcher to a fixture root without teaching production
+/// discovery about test-only paths.
+struct AtRoot {
+    launcher: &'static dyn Launcher,
+    root: PathBuf,
+}
+
+impl Launcher for AtRoot {
+    fn origin(&self) -> Origin {
+        self.launcher.origin()
+    }
+
+    fn roots(&self) -> Vec<PathBuf> {
+        vec![self.root.clone()]
+    }
+
+    fn candidate_roots(&self) -> Vec<PathBuf> {
+        vec![self.root.clone()]
+    }
+
+    fn libraries(&self, root: &Path) -> Libraries {
+        self.launcher.libraries(root)
+    }
+
+    fn games(&self, library: &Path) -> Catalogue {
+        self.launcher.games(library)
+    }
+}
+
+#[test]
+fn inventory_collects_the_identity_origin_and_library_from_every_launcher() {
+    let fixture = TempDir::new("inventory-contract");
+    let steam_library = fixture.dir("steam");
+    let steam_install = fixture.dir("steam/steamapps/common/dota 2 beta");
+    fixture.write(
+        "steam/steamapps/appmanifest_570.acf",
+        "\"AppState\" { \"appid\" \"570\" \"name\" \"Dota 2\" \"installdir\" \"dota 2 beta\" }",
+    );
+    let heroic_library = fixture.dir("heroic");
+    let heroic_install = fixture.dir("games/Hades");
+    fixture.write(
+        "heroic/store_cache/gog_library.json",
+        &format!(
+            r#"{{"library":[{{"app_name":"heroic-hades","title":"Hades","is_installed":true,"install":{{"install_path":"{}"}}}}]}}"#,
+            heroic_install.display()
+        ),
+    );
+    let steam = AtRoot {
+        launcher: &crate::steam::STEAM,
+        root: steam_library.clone(),
+    };
+    let heroic = AtRoot {
+        launcher: &crate::heroic::HEROIC,
+        root: heroic_library.clone(),
+    };
+
+    let inventory = super::Inventory::collect(&[&steam, &heroic]);
+
+    assert_eq!(inventory.entries.len(), 2);
+    assert_eq!(inventory.entries[0].game.identity, Identity::SteamApp(570));
+    assert_eq!(inventory.entries[0].game.origin, crate::steam::ORIGIN);
+    assert_eq!(inventory.entries[0].library, steam_library);
+    assert_eq!(inventory.entries[0].game.install_dir, steam_install);
+    assert_eq!(
+        inventory.entries[1].game.identity,
+        Identity::Native("heroic-hades".to_owned())
+    );
+    assert_eq!(
+        inventory.entries[1].game.origin,
+        Origin::new("heroic", "Heroic / GOG")
+    );
+    assert_eq!(inventory.entries[1].library, heroic_library);
+    assert_eq!(inventory.entries[1].game.install_dir, heroic_install);
+}
