@@ -13,7 +13,7 @@ fn version_and_help_do_not_start_the_terminal_browser() {
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8_lossy(&version.stdout),
-        "dxray-tui 0.0.1\n"
+        format!("dxray-tui {}\n", env!("CARGO_PKG_VERSION"))
     );
     assert!(version.stderr.is_empty());
 
