@@ -87,14 +87,16 @@ Start the terminal browser:
 dxray-tui
 ```
 
-For `inspect`, `game`, `installed` and `steam`, use `--view compact` for static renderer evidence,
+For `inspect` and `game`, use `--view compact` for static renderer evidence,
 features and essential caveats, or `--view full` for absolute paths, versions,
-imports and executable ranking. Compact output retains each input's path.
-`--view` cannot be combined with `--json`. Only `inspect` accepts
-`-r` / `--recursive`; only `nvapi` accepts repeatable `--appid ID` options.
-Without `--view`, reports use the standard text layout. Invalid
-options exit 2 before scanning. Direct paths do not provide launcher
-or Proton context, so these reports mark the static NVAPI policy as not assessed.
+imports and executable ranking. Without `--view`, these commands use the
+standard text layout. `installed` and `steam` use the compact inventory tree by
+default; use `--view full` for complete static evidence and executable ranking.
+Compact output retains each input's path. `--view` cannot be combined with
+`--json`. Only `inspect` accepts `-r` / `--recursive`; only `nvapi` accepts
+repeatable `--appid ID` options. Invalid options exit 2 before scanning. Direct
+paths do not provide launcher or Proton context, so these reports mark the
+static NVAPI policy as not assessed.
 
 Inventory reports are grouped as launcher, library and game. Each game header
 keeps its launcher ID and a static renderer result; the rows below it carry the
@@ -107,9 +109,9 @@ NVAPI findings describe the available static Proton policy, not runtime behavior
 Notes and problems remain visible in every view, with the existing exit codes.
 
 ```sh
-dxray installed --view compact
+dxray installed
 dxray installed --view full
-dxray steam --view compact
+dxray steam
 dxray steam --view full
 ```
 

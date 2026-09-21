@@ -46,12 +46,12 @@ enum Commands {
     Game(GameArgs),
     /// List installations declared by all supported launchers.
     #[command(
-        after_help = "Examples:\n  dxray installed --view compact\n  dxray installed --view full\n  dxray installed --json"
+        after_help = "The default view is compact. Use --view full for complete evidence.\n\nExamples:\n  dxray installed\n  dxray installed --view full\n  dxray installed --json"
     )]
     Installed(InventoryArgs),
     /// List installations declared by Steam.
     #[command(
-        after_help = "Examples:\n  dxray steam --view compact\n  dxray steam --view full\n  dxray steam --json"
+        after_help = "The default view is compact. Use --view full for complete evidence.\n\nExamples:\n  dxray steam\n  dxray steam --view full\n  dxray steam --json"
     )]
     Steam(InventoryArgs),
     /// Read a Proton build's static NVAPI policy.
@@ -75,6 +75,16 @@ impl OutputArgs {
             Some(View::Full) => report::Presentation::Full,
             None => report::Presentation::Standard,
         }
+    }
+
+    /// Inventories prioritize scanning a library, so their default favors the
+    /// compact tree. File and directory analysis retain the standard report.
+    fn inventory_presentation(&self) -> report::Presentation {
+        self.view
+            .map_or(report::Presentation::Compact, |view| match view {
+                View::Compact => report::Presentation::Compact,
+                View::Full => report::Presentation::Full,
+            })
     }
 }
 
@@ -265,7 +275,7 @@ fn read_policy(target: &Path, appids: &[String]) -> ExitCode {
 /// listing and not from what was printed.
 fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> ExitCode {
     let json = output.json;
-    let found = listing::scan_with_view(launchers, output.presentation());
+    let found = listing::scan_with_view(launchers, output.inventory_presentation());
 
     if found.roots == 0 {
         // Nothing was scanned, so there are no counts to report and no summary

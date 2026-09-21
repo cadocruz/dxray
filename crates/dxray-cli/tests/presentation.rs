@@ -179,6 +179,24 @@ fn default_output_and_json_preserve_analysis() {
             file.display()
         )
     );
+    let game = dxray_with_home(
+        home.path(),
+        ["game", file.parent().unwrap().to_str().unwrap()],
+    );
+    assert_eq!(game.status.code(), Some(0));
+    let game_text = stdout_of(&game);
+    assert!(
+        game_text.contains("ranked"),
+        "game keeps the standard ranking: {game_text}"
+    );
+    assert!(
+        game_text.contains("verdict   no graphics API determined"),
+        "game keeps the standard report: {game_text}"
+    );
+    assert!(
+        !game_text.contains("Install: "),
+        "game did not inherit the inventory compact view: {game_text}"
+    );
     for (args, code) in [
         (
             vec![

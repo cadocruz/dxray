@@ -36,15 +36,21 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
     .unwrap();
     std::fs::write(steam.join("steamapps/appmanifest_999.acf"), "broken").unwrap();
     for command in ["installed", "steam"] {
-        let legacy = dxray_with_home(home.path(), [command]);
+        let default = dxray_with_home(home.path(), [command]);
         let json = dxray_with_home(home.path(), [command, "--json"]);
-        assert!(stdout_of(&legacy).contains("Library:"));
-        assert!(stdout_of(&legacy).contains("├─") || stdout_of(&legacy).contains("└─"));
+        assert!(stdout_of(&default).contains("Library:"));
+        assert!(stdout_of(&default).contains("├─") || stdout_of(&default).contains("└─"));
+        let compact = dxray_with_home(home.path(), [command, "--view", "compact"]);
+        assert_eq!(
+            compact.stdout, default.stdout,
+            "{command} default must be compact"
+        );
+        assert_eq!(compact.stderr, default.stderr);
         for view in ["compact", "full"] {
             let out = dxray_with_home(home.path(), [command, "--view", view]);
             let text = stdout_of(&out);
-            assert_eq!(out.status.code(), legacy.status.code());
-            assert_eq!(out.stderr, legacy.stderr);
+            assert_eq!(out.status.code(), default.status.code());
+            assert_eq!(out.stderr, default.stderr);
             assert!(text.contains("Direct3D 11"));
             assert!(text.contains("DLSS"));
             for token in [
@@ -67,7 +73,7 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
                 assert!(text.contains("ranked"));
                 assert!(text.contains("Launcher root"));
             } else {
-                assert_compact_inventory(text, stdout_of(&legacy), command);
+                assert_compact_inventory(text, stdout_of(&default), command);
             }
             let conflict = dxray_with_home(home.path(), [command, "--view", view, "--json"]);
             assert_eq!(conflict.status.code(), Some(2));
@@ -76,7 +82,7 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
         }
         assert_eq!(
             dxray_with_home(home.path(), [command]).stdout,
-            legacy.stdout
+            default.stdout
         );
         assert_eq!(
             dxray_with_home(home.path(), [command, "--json"]).stdout,
@@ -85,8 +91,8 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
     }
 }
 
-fn assert_compact_inventory(text: &str, legacy: &str, command: &str) {
-    assert!(text.lines().count() <= legacy.lines().count());
+fn assert_compact_inventory(text: &str, default: &str, command: &str) {
+    assert!(text.lines().count() <= default.lines().count());
     for full_only in [
         "launcher root",
         "ranked",
@@ -163,13 +169,13 @@ fn compact_steam_uses_each_library_header_for_relative_install_paths() {
         2
     );
 
-    let legacy = dxray_with_home(home.path(), ["steam"]);
+    let default = dxray_with_home(home.path(), ["steam"]);
     let full = dxray_with_home(home.path(), ["steam", "--view", "full"]);
     let json = dxray_with_home(home.path(), ["steam", "--json"]);
-    assert_eq!(compact.status.code(), legacy.status.code());
-    assert_eq!(compact.stderr, legacy.stderr);
-    assert_eq!(full.status.code(), legacy.status.code());
-    assert_eq!(json.status.code(), legacy.status.code());
+    assert_eq!(compact.stdout, default.stdout);
+    assert_eq!(compact.stderr, default.stderr);
+    assert_eq!(full.status.code(), default.status.code());
+    assert_eq!(json.status.code(), default.status.code());
 }
 
 use common::{Image, TempDir, dxray_with_home, stderr_of, stdout_of};
@@ -182,10 +188,10 @@ fn inventory_views_distinguish_empty_and_unavailable_installs() {
     std::fs::remove_file(root.join("steamapps/common/dota 2 beta/dota2.exe")).unwrap();
     std::fs::remove_dir(root.join("steamapps/common/dota 2 beta")).unwrap();
     for command in ["installed", "steam"] {
-        let legacy = dxray_with_home(home.path(), [command]);
+        let default = dxray_with_home(home.path(), [command]);
         for view in ["compact", "full"] {
             let out = dxray_with_home(home.path(), [command, "--view", view]);
-            assert_eq!(out.status.code(), legacy.status.code());
+            assert_eq!(out.status.code(), default.status.code());
             let text = stdout_of(&out);
             assert!(text.contains("no executable found"));
             assert!(text.contains("installation could not be read"));
@@ -193,6 +199,7 @@ fn inventory_views_distinguish_empty_and_unavailable_installs() {
             assert!(text.contains("Dota 2"));
             assert!(text.contains("No executable") || text.contains("Evidence unavailable"));
             if view == "compact" {
+                assert_eq!(out.stdout, default.stdout);
                 assert!(text.contains("Installations without game evidence"));
                 assert!(text.contains("Evidence unavailable"));
                 assert!(!text.contains("Tools & Runtimes"));
@@ -278,7 +285,7 @@ fn fake_heroic(home: &TempDir, with_game: bool) -> PathBuf {
 }
 
 #[test]
-fn every_launcher_on_the_machine_is_listed_and_each_game_says_which_one() {
+fn every_launcher_on_the_machine_is_listed_and_the_full_view_names_each_game_source() {
     // The whole point of the flag. Somebody scripting `dxray steam` to audit
     // their library got an incomplete answer with no signal that it was
     // incomplete: the Heroic games were simply not there.
@@ -302,13 +309,17 @@ fn every_launcher_on_the_machine_is_listed_and_each_game_says_which_one() {
         text.contains("Steam ["),
         "the Steam block establishes the source for its games, got:\n{text}"
     );
-    assert!(
-        text.contains("Source: Heroic / GOG"),
-        "and a Heroic game names the shop, not just the launcher, got:\n{text}"
-    );
+    assert!(text.contains("Heroic ["), "got:\n{text}");
     assert!(
         text.contains(&format!("Library: {} (1 installation)", heroic.display())),
         "the Heroic configuration is not a Steam library, got:\n{text}"
+    );
+
+    let full = dxray_with_home(home.path(), ["installed", "--view", "full"]);
+    assert!(
+        stdout_of(&full).contains("Source: Heroic / GOG"),
+        "the full view names the shop for each entry, got:\n{}",
+        stdout_of(&full)
     );
 }
 

@@ -403,7 +403,7 @@ fn each_game_gets_the_executable_this_tool_would_analyse_named_under_its_directo
     )
     .expect("fixture");
 
-    let text = stdout_of(&dxray_with_home(home.path(), ["steam"])).to_owned();
+    let text = stdout_of(&dxray_with_home(home.path(), ["steam", "--view", "full"])).to_owned();
 
     assert!(text.contains("best"), "the row exists at all, got:\n{text}");
     assert!(
@@ -438,7 +438,7 @@ fn a_redistributable_package_answers_for_itself_instead_of_being_filtered_by_nam
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["steam"]);
+    let out = dxray_with_home(home.path(), ["steam", "--view", "full"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -515,7 +515,7 @@ fn a_game_that_is_not_downloaded_yet_names_the_missing_directory_and_costs_no_ex
     )
     .expect("manifest");
 
-    let out = dxray_with_home(home.path(), ["steam"]);
+    let out = dxray_with_home(home.path(), ["steam", "--view", "full"]);
     let text = stdout_of(&out);
 
     assert!(text.contains("directory could not be read"), "got:\n{text}");
@@ -648,7 +648,7 @@ fn a_game_that_merely_imports_no_renderer_leaves_the_scan_clean() {
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["steam"]);
+    let out = dxray_with_home(home.path(), ["steam", "--view", "full"]);
     let text = stdout_of(&out);
 
     assert!(
@@ -698,7 +698,7 @@ fn an_install_that_argues_nothing_is_listed_under_the_ones_that_do() {
     )
     .expect("fixture");
 
-    let out = dxray_with_home(home.path(), ["steam"]);
+    let out = dxray_with_home(home.path(), ["steam", "--view", "full"]);
     let text = stdout_of(&out);
 
     let game_at = text.find("dota 2 beta").expect("the game is listed");
