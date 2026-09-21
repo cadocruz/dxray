@@ -656,12 +656,10 @@ mod tests {
     }
 
     #[test]
-    fn tui_keeps_the_same_steam_identity_set_as_installed_for_proton_and_games() {
-        // Mirrors the CLI `--installed` fixture: one ordinary Steam game and
-        // one Proton runtime, which Steam's manifests label alike. Discovery
-        // must emit the complete identity set rather than silently discard
-        // either row — there is nothing left in the trait to discard one with,
-        // and this test is what would notice if a filter came back.
+    fn tui_keeps_the_launcher_identity_set_for_steam_and_heroic() {
+        // Both surfaces consume the core launcher walk. Keep the identities
+        // from Steam and Heroic, including Steam's Proton runtime, so either
+        // consumer cannot quietly filter one launcher differently.
         let steam = Fake {
             origin: dxray_core::Origin::new("steam", "Steam"),
             roots: vec![PathBuf::from("/dxray-tui-steam-inventory")],
@@ -682,8 +680,28 @@ mod tests {
             notes: Vec::new(),
             catalogue_notes: Vec::new(),
         };
+        let heroic = Fake {
+            origin: dxray_core::Origin::new("heroic", "Heroic"),
+            roots: vec![PathBuf::from("/dxray-tui-heroic-inventory")],
+            games: vec![
+                dxray_core::Game {
+                    identity: dxray_core::Identity::Native("epic-game".to_owned()),
+                    name: "Epic Game".to_owned(),
+                    install_dir: PathBuf::from("/games/epic-game"),
+                    origin: dxray_core::Origin::new("heroic", "Heroic / Epic"),
+                },
+                dxray_core::Game {
+                    identity: dxray_core::Identity::Native("gog-game".to_owned()),
+                    name: "GOG Game".to_owned(),
+                    install_dir: PathBuf::from("/games/gog-game"),
+                    origin: dxray_core::Origin::new("heroic", "Heroic / GOG"),
+                },
+            ],
+            notes: Vec::new(),
+            catalogue_notes: Vec::new(),
+        };
 
-        let found: HashSet<_> = drain(&[&steam])
+        let found: HashSet<_> = drain(&[&steam, &heroic])
             .into_iter()
             .filter_map(|message| match message {
                 Msg::Game(entry) => Some(entry.identity),
@@ -693,11 +711,13 @@ mod tests {
         let expected = HashSet::from([
             dxray_core::Identity::SteamApp(570),
             dxray_core::Identity::SteamApp(1_493_710),
+            dxray_core::Identity::Native("epic-game".to_owned()),
+            dxray_core::Identity::Native("gog-game".to_owned()),
         ]);
 
         assert_eq!(
             found, expected,
-            "TUI and --installed must expose one identity set"
+            "TUI and --installed must expose one launcher identity set"
         );
     }
 }
