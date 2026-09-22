@@ -245,7 +245,7 @@ fn a_game_with_no_prefix_is_a_sentence_rather_than_an_error() {
     // The ordinary state of most of a real library: owned, installed, never
     // launched under Proton. A row that said "error" about it would put a
     // hundred red lines on a screen where nothing is wrong.
-    let answer = super::Builds::default().answer(Path::new("/definitely/not/here"), 440);
+    let answer = super::Builds::default().answer(None, Path::new("/definitely/not/here"), 440);
 
     assert!(
         answer.verdict.starts_with("not determined"),
@@ -268,10 +268,135 @@ fn one_cache_serves_both_the_listing_and_the_detail_pane() {
     // drift: one carried the condition's source lines and the other did not.
     // They now share the answer and differ only in what they choose to print,
     // which is a rendering decision rather than a data one.
-    let answer = super::Builds::default().answer(Path::new("/definitely/not/here"), 440);
+    let answer = super::Builds::default().answer(None, Path::new("/definitely/not/here"), 440);
 
     assert!(
         answer.condition.is_empty(),
         "an answer that read nothing states no condition"
     );
+}
+
+/// A Steam root that is also the game's library, a 10.0-shaped build, the
+/// game's launch options, and the prefix its last launch left.
+struct Launched(TempDir);
+
+const GOTG: u32 = 1_088_850;
+
+impl Launched {
+    fn new(tag: &str, options: &str, recorded: &str) -> Self {
+        let dir = TempDir::new(tag);
+        let build = "steamapps/common/Proton 10.0";
+        dir.write(&format!("{build}/proton"), crate::testutil::PROTON_10);
+        dir.dir(&format!("{build}/files/lib"));
+        let root = dir.path().join(build).display().to_string();
+        let config_info = [
+            "10.0-200".to_owned(),
+            format!("{root}/files/share/fonts/"),
+            format!("{root}/files/lib/"),
+            "/home/u/.steam/steam".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            format!("{root}/files/share/default_pfx/"),
+            String::new(),
+            "False".to_owned(),
+            "True".to_owned(),
+            "d3dcompiler_*.dll".to_owned(),
+            recorded.to_owned(),
+            "False".to_owned(),
+        ]
+        .join("\n");
+        dir.write(
+            &format!("steamapps/compatdata/{GOTG}/config_info"),
+            &config_info,
+        );
+        dir.write(
+            "userdata/1/config/localconfig.vdf",
+            &format!(
+                "\"UserLocalConfigStore\" {{ \"Software\" {{ \"Valve\" {{ \"Steam\" {{ \"apps\" {{ \
+                 \"{GOTG}\" {{ \"LaunchOptions\" \"{options}\" }} }} }} }} }} }}"
+            ),
+        );
+        Self(dir)
+    }
+
+    fn settings(&self, text: &str) -> &Self {
+        self.0
+            .write("steamapps/common/Proton 10.0/user_settings.py", text);
+        self
+    }
+
+    fn answer(&self) -> super::Answer {
+        let root = self.0.path();
+        super::Builds::default().answer(Some(root), root, GOTG)
+    }
+}
+
+#[test]
+fn a_launch_option_that_forces_nvapi_is_the_answer_and_the_last_launch_confirms_it() {
+    let answer = Launched::new("forced", "PROTON_FORCE_NVAPI=1 %command%", "True").answer();
+
+    assert_eq!(answer.available, Some(true), "{}", answer.verdict);
+    for part in [
+        "PROTON_FORCE_NVAPI=1 in launch options adds forcenvapi",
+        "the script alone says: NVAPI is withheld",
+        "the last launch recorded use_nvapi=True",
+    ] {
+        assert!(
+            answer.verdict.contains(part),
+            "{part:?} in {}",
+            answer.verdict
+        );
+    }
+    assert!(!answer.verdict.contains("disagrees"), "{}", answer.verdict);
+}
+
+#[test]
+fn with_no_launch_option_the_default_stands_and_the_record_agrees() {
+    let answer = Launched::new("default", "", "False").answer();
+
+    assert_eq!(answer.available, Some(false), "{}", answer.verdict);
+    assert!(
+        answer.verdict.starts_with("NVAPI is withheld")
+            && answer.verdict.contains("recorded use_nvapi=False"),
+        "{}",
+        answer.verdict
+    );
+}
+
+#[test]
+fn a_record_that_contradicts_the_prediction_leaves_the_answer_unsettled() {
+    // The case this module used to get wrong: a launch the options no longer
+    // describe, or a variable set somewhere this reader does not look.
+    let answer = Launched::new("contradicted", "", "True").answer();
+
+    assert_eq!(answer.available, None, "{}", answer.verdict);
+    assert!(answer.verdict.contains("disagrees"), "{}", answer.verdict);
+}
+
+#[test]
+fn user_settings_beside_the_build_are_read_as_a_source() {
+    let launched = Launched::new("user-settings", "", "True");
+    launched.settings("user_settings = {\n    \"PROTON_FORCE_NVAPI\": \"1\",\n}\n");
+
+    let answer = launched.answer();
+
+    assert_eq!(answer.available, Some(true), "{}", answer.verdict);
+    assert!(
+        answer
+            .verdict
+            .contains("in user_settings.py adds forcenvapi"),
+        "{}",
+        answer.verdict
+    );
+}
+
+#[test]
+fn without_a_steam_root_there_are_no_launch_options_to_apply() {
+    let launched = Launched::new("no-root", "PROTON_FORCE_NVAPI=1 %command%", "False");
+    let library = launched.0.path();
+
+    let answer = super::Builds::default().answer(None, library, GOTG);
+
+    assert_eq!(answer.available, Some(false), "{}", answer.verdict);
 }

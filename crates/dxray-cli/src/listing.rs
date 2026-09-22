@@ -767,7 +767,7 @@ fn render_games(
     for game in games {
         // One call, shared with the terminal browser, so that the facts
         // established about a game cannot depend on which surface asked.
-        let facts = dxray_core::inspect(game, place.library, builds);
+        let facts = dxray_core::inspect(game, place.install, place.library, builds);
         let dxray_core::inspect::Inspection { survey, nvapi } = facts;
         let details = tree_facts(
             &survey,

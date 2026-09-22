@@ -45,9 +45,13 @@ mod tests;
 
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::nvapi::{Applied, Decision, Environment, Reading, Resolution, UserSettings};
+use crate::steam::launch::Launches;
 
 /// The file name of the launcher script inside a Proton install.
 const SCRIPT: &str = "proton";
@@ -385,77 +389,155 @@ impl Answer {
     }
 }
 
-/// One reading per Proton script.
-///
-/// A cache and nothing else. It holds the result of reading a file, including
-/// the result "this file defeated the reader", so a build that cannot be parsed
-/// costs one parse rather than one per game and reports the same sentence for
-/// every game that shares it.
-///
-/// A library where two hundred games share one Proton would otherwise tokenise
-/// the same two thousand lines two hundred times. In a terminal UI that cost
-/// lands on the thread the list is filling from, so it is two hundred games
-/// that do not appear.
+/// One Proton build, read once per scan.
+struct Build {
+    reading: Reading,
+    settings: UserSettings,
+}
+
+/// Everything a scan reads once and many games share: each Proton build, and
+/// each Steam installation's launch options.
 #[derive(Default)]
 pub struct Builds {
-    read: HashMap<PathBuf, std::result::Result<crate::nvapi::Reading, String>>,
+    read: HashMap<PathBuf, std::result::Result<Build, String>>,
+    launches: HashMap<PathBuf, Launches>,
 }
 
 impl Builds {
-    /// What the Proton that last ran `appid` in `library` does to it.
+    /// The NVAPI answer for a game from any launcher. Only a Steam application
+    /// has a prefix to read; any other game is told the question does not
+    /// apply.
     ///
-    /// Never an error. Every way this can fail is a sentence somebody should
-    /// read, and the commonest of them - a game that has never been launched -
-    /// is the ordinary state of most of a real library rather than anything
-    /// wrong.
-    /// What the Proton policy is for a game from any launcher.
-    ///
-    /// The single place the capability difference between launchers is spent.
-    /// A [`SteamApp`](crate::launcher::Identity::SteamApp) identity names a
-    /// `compatdata` prefix and gets a real verdict; a
-    /// [`Native`](crate::launcher::Identity::Native) one is told, in a sentence
-    /// naming its launcher, that the question does not apply.
-    ///
-    /// The match is exhaustive and the enum is the only way in, so a launcher
-    /// cannot accidentally be given an answer it has no right to — and a Steam
-    /// game cannot silently lose one, because there is no conversion that turns
-    /// its appid into a string identity.
-    pub fn answer_for(&mut self, library: &Path, game: &crate::launcher::Game) -> Answer {
+    /// `root` is the Steam installation the game came from, which is where its
+    /// launch options live.
+    pub fn answer_for(
+        &mut self,
+        root: Option<&Path>,
+        library: &Path,
+        game: &crate::launcher::Game,
+    ) -> Answer {
         match game.identity.steam_appid() {
-            Some(appid) => self.answer(library, appid),
+            Some(appid) => self.answer(root, library, appid),
             None => Answer::not_applicable(game.origin),
         }
     }
 
-    pub fn answer(&mut self, library: &Path, appid: u32) -> Answer {
-        let script = match for_game(library, appid) {
+    /// What the Proton that last ran `appid` in `library` does to its NVAPI,
+    /// with the launch options from `root` applied. Never an error: every
+    /// failure is a sentence.
+    pub fn answer(&mut self, root: Option<&Path>, library: &Path, appid: u32) -> Answer {
+        let prefix = compatdata(library, appid);
+        let script = match from_prefix(&prefix) {
             Ok(script) => script,
             Err(error) => return Answer::undetermined(&error.to_string()),
         };
-        let reading = self.read.entry(script.clone()).or_insert_with(|| {
+        let build = self.read.entry(script.clone()).or_insert_with(|| {
             read(&script)
                 .map_err(|error| error.to_string())
                 .and_then(|source| crate::nvapi::scan(&source).map_err(|error| error.to_string()))
+                .map(|reading| Build {
+                    reading,
+                    settings: user_settings_beside(&script),
+                })
         });
-        match reading {
-            Err(error) => Answer {
-                script: Some(script),
-                verdict: format!("not determined: this script was not understood: {error}"),
-                available: None,
-                condition: Vec::new(),
-            },
-            Ok(reading) => {
-                let decision = crate::nvapi::decide(reading, &appid.to_string());
-                Answer {
+        let build = match build {
+            Ok(build) => build,
+            Err(error) => {
+                return Answer {
                     script: Some(script),
-                    verdict: decision.to_string(),
-                    available: decision.available(),
-                    condition: decision
-                        .condition()
-                        .map(crate::nvapi::Condition::source)
-                        .unwrap_or_default(),
-                }
+                    verdict: format!("not determined: this script was not understood: {error}"),
+                    available: None,
+                    condition: Vec::new(),
+                };
             }
+        };
+        // Without a Steam root there are no launch options to read.
+        let launch = root.map_or(Ok(Vec::new()), |root| {
+            self.launches
+                .entry(root.to_path_buf())
+                .or_insert_with(|| crate::steam::launch::launches(root))
+                .environment(appid)
+        });
+        let appid = appid.to_string();
+        let environment = Environment::new(launch, &build.settings);
+        let decision = crate::nvapi::decide(&build.reading, &appid);
+        let resolution = crate::nvapi::resolve(&build.reading, &appid, &environment);
+        let recorded = build
+            .reading
+            .recorded_line
+            .and_then(|line| recorded(&prefix, line));
+        compose(script, &decision, &resolution, recorded)
+    }
+}
+
+/// The answer the default policy, the launch environment and the last launch
+/// give between them.
+fn compose(
+    script: PathBuf,
+    decision: &Decision,
+    resolution: &Resolution,
+    recorded: Option<bool>,
+) -> Answer {
+    let condition = || {
+        decision
+            .condition()
+            .map(crate::nvapi::Condition::source)
+            .unwrap_or_default()
+    };
+    let (mut verdict, mut available, condition) = match resolution {
+        Resolution::Default => (decision.to_string(), decision.available(), condition()),
+        Resolution::Computed { use_nvapi, applied } => {
+            let how: Vec<String> = applied.iter().map(Applied::describe).collect();
+            (
+                format!(
+                    "NVAPI is {}: {}; the script alone says: {decision}",
+                    if *use_nvapi { "offered" } else { "withheld" },
+                    how.join(", ")
+                ),
+                Some(*use_nvapi),
+                Vec::new(),
+            )
         }
+        Resolution::Undetermined(why) => (
+            format!("not determined: {why}; the script alone says: {decision}"),
+            None,
+            condition(),
+        ),
+    };
+    if let Some(recorded) = recorded {
+        let spelled = if recorded { "True" } else { "False" };
+        let _ = write!(verdict, "; the last launch recorded use_nvapi={spelled}");
+        if available.is_some_and(|expected| expected != recorded) {
+            verdict.push_str(
+                ", which disagrees: the options changed since, or something this reader \
+                 does not see sets it",
+            );
+            available = None;
+        }
+    }
+    Answer {
+        script: Some(script),
+        verdict,
+        available,
+        condition,
+    }
+}
+
+/// `user_settings.py` in the build's directory, which Proton imports.
+fn user_settings_beside(script: &Path) -> UserSettings {
+    match fs::read_to_string(script.with_file_name("user_settings.py")) {
+        Ok(text) => crate::nvapi::user_settings(&text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => UserSettings::Absent,
+        Err(_) => UserSettings::Unreadable,
+    }
+}
+
+/// The `use_nvapi` value the last launch wrote to `config_info`, at `line`.
+fn recorded(compatdata: &Path, line: usize) -> Option<bool> {
+    let text = fs::read_to_string(compatdata.join("config_info")).ok()?;
+    match text.lines().nth(line.checked_sub(1)?)?.trim() {
+        "True" => Some(true),
+        "False" => Some(false),
+        _ => None,
     }
 }

@@ -295,3 +295,50 @@ fn put16(buf: &mut [u8], at: usize, v: u16) {
 fn put32(buf: &mut [u8], at: usize, v: u32) {
     buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
 }
+
+/// Proton 10.0: the lists, the switches, the expression and the tuple.
+pub const PROTON_10: &str = r#"import os
+
+class CompatData:
+    def setup_prefix(self):
+            use_nvapi = 'disablenvapi' not in g_session.compat_config or 'forcenvapi' in g_session.compat_config
+            prefix_info = '\n'.join((
+                CURRENT_PREFIX_VERSION,
+                g_proton.fonts_dir,
+                g_proton.lib_dir,
+                steamdir,
+                getmtimestr(steamdir, 'legacycompat', 'steamclient.dll'),
+                getmtimestr(steamdir, 'legacycompat', 'steamclient64.dll'),
+                getmtimestr(steamdir, 'legacycompat', 'Steam.dll'),
+                g_proton.default_pfx_dir,
+                getmtimestr(g_proton.default_pfx_dir, 'system.reg'),
+                str(use_wined3d),
+                str(use_dxvk_dxgi),
+                builtin_dll_copy,
+                str(use_nvapi),
+                str(use_dxvk_d3d8),
+            ))
+
+def default_compat_config():
+    ret = set()
+    if "SteamAppId" in os.environ:
+        appid = os.environ["SteamAppId"]
+        if appid in [
+                # disable dxvknvapi for titles which dislike it
+                "1088850", #Marvel's Guardians of the Galaxy
+                ]:
+            ret.add("disablenvapi")
+
+        if appid in [
+                "2395210", #Tony Hawk's Pro Skater 1 + 2
+                ]:
+            ret.add("forcenvapi")
+    return ret
+
+class Session:
+    def init_session(self):
+        if not self.check_environment("PROTON_USE_WINED3D", "wined3d"):
+            self.check_environment("PROTON_USE_WINED3D11", "wined3d")
+        self.check_environment("PROTON_DISABLE_NVAPI", "disablenvapi")
+        self.check_environment("PROTON_FORCE_NVAPI", "forcenvapi")
+"#;

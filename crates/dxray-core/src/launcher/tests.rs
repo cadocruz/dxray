@@ -58,7 +58,7 @@ fn a_steam_game_can_still_be_asked_for_a_proton_policy() {
 #[test]
 fn a_heroic_game_is_told_the_proton_question_does_not_apply_rather_than_answered() {
     let mut builds = crate::proton::Builds::default();
-    let answer = builds.answer_for(Path::new("/config/heroic"), &heroic_game("hades-gog"));
+    let answer = builds.answer_for(None, Path::new("/config/heroic"), &heroic_game("hades-gog"));
 
     assert_eq!(
         answer.available, None,
@@ -99,7 +99,7 @@ fn a_heroic_id_cannot_become_a_steam_appid_even_when_it_is_all_digits() {
     let mut builds = crate::proton::Builds::default();
     assert!(
         builds
-            .answer_for(Path::new("/config/heroic"), &game)
+            .answer_for(None, Path::new("/config/heroic"), &game)
             .verdict
             .starts_with("not applicable:"),
         "and asking anyway gets the refusal, not somebody else's policy"

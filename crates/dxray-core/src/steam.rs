@@ -37,6 +37,8 @@ use std::path::{Path, PathBuf};
 use crate::launcher::{Catalogue, Identity, Libraries, Origin};
 use crate::vdf::{self, Object, Value};
 
+pub mod launch;
+
 /// One installed game. Steam's manifests and Heroic's caches describe the same
 /// thing, so they hand back the same type — see [`launcher`](crate::launcher).
 pub use crate::launcher::Game;

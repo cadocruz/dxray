@@ -58,20 +58,21 @@ pub struct Inspection {
     pub nvapi: Answer,
 }
 
-/// Establishes what this crate knows about `game`, found in `library`.
+/// Establishes what this crate knows about `game`, found in `library` under
+/// the launcher installation `root`.
 ///
-/// `builds` is threaded through rather than built here so that one reading per
-/// Proton build serves a whole scan. A library where a hundred games share one
-/// Proton would otherwise tokenise the same two thousand lines a hundred times.
-///
-/// The game's title is always handed to the ranking. It is a real signal — an
-/// executable whose name resembles the title outranks one that does not — and
-/// the caller that used to withhold it was getting a worse answer to the same
-/// question for no stated reason.
-pub fn inspect(game: &Game, library: &Path, builds: &mut Builds) -> Inspection {
+/// `builds` is shared across a scan so each Proton build and each launcher's
+/// launch options are read once. The game's title is always handed to the
+/// ranking, because it is a ranking signal.
+pub fn inspect(
+    game: &Game,
+    root: Option<&Path>,
+    library: &Path,
+    builds: &mut Builds,
+) -> Inspection {
     Inspection {
         survey: crate::candidates(&game.install_dir, Some(&game.name)),
-        nvapi: builds.answer_for(library, game),
+        nvapi: builds.answer_for(root, library, game),
     }
 }
 
@@ -149,6 +150,7 @@ mod tests {
 
         let facts = inspect(
             &game(install.path().to_path_buf()),
+            None,
             Path::new("/not/a/library"),
             &mut Builds::default(),
         );
@@ -181,6 +183,7 @@ mod tests {
         // that from a sentence.
         let facts = inspect(
             &game(PathBuf::from("/dxray-inspect-no-such-directory")),
+            None,
             Path::new("/not/a/library"),
             &mut Builds::default(),
         );
@@ -217,6 +220,7 @@ mod tests {
         // wrong with it, so the absence is worded rather than left blank.
         let facts = inspect(
             &game(PathBuf::from("/dxray-inspect-no-such-directory")),
+            None,
             Path::new("/not/a/library"),
             &mut Builds::default(),
         );

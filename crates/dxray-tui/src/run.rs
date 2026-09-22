@@ -336,7 +336,7 @@ impl dxray_core::Visitor for Stream<'_> {
             // The launchers' capability difference is spent inside it rather
             // than here: a Steam appid names a compatibility prefix, and a
             // native identity is told so in a sentence naming its own launcher.
-            let facts = dxray_core::inspect(&game, library, &mut self.builds);
+            let facts = dxray_core::inspect(&game, self.root.as_deref(), library, &mut self.builds);
             self.live()?;
             let entry = Entry::build(game, library.to_path_buf(), facts.survey, facts.nvapi);
             self.send(Msg::Game(Box::new(entry)))?;

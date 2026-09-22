@@ -114,25 +114,21 @@
 //! ships the old single-block shape under a version that suggests the new one.
 //! Only shapes are recognised.
 //!
-//! # This answers about the script, not about the next launch
+//! # The lists are only the default
 //!
-//! Everything here describes one file: which list names an appid, on which
-//! line, under which flag. It does not describe what Proton will do when that
-//! game starts, and the gap between those two is not the inference above — it
-//! is a per-game environment variable set in a launcher's options, which can
-//! decide NVAPI for one title and lives in the launcher's own configuration
-//! rather than in the `proton` file. Steam keeps them in `localconfig.vdf`;
-//! nothing in this crate opens it.
-//!
-//! So the sentence a caller prints is accurate about the evidence it names and
-//! will be read as a prediction. Those agree only while nobody has touched
-//! their launch options for that game. A real prefix has already been seen
-//! whose recorded `use_nvapi` contradicts the list this reader found, on a
-//! machine where such a variable had been set; the README's "What is not
-//! proven" carries that case and the measurement that would settle it.
+//! [`decide`] describes the script's lists. A launch can override them:
+//! `check_environment` calls run afterwards and add or remove each flag, so
+//! `PROTON_FORCE_NVAPI=1` in a game's launch options changes the answer for
+//! that game. [`resolve`] applies a launch's [`Environment`] the way the script
+//! does.
 
+mod environment;
 #[cfg(test)]
 mod tests;
+
+pub use environment::{
+    Applied, Environment, Formula, Resolution, SetBy, Switch, UserSettings, resolve, user_settings,
+};
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -456,6 +452,14 @@ pub struct Reading {
     /// true negative if this is zero and a build spelling its flags in some new
     /// way if it is not.
     pub nvapi_mentions: usize,
+    /// The `check_environment` calls for NVAPI flags, in file order.
+    pub switches: Vec<Switch>,
+    /// NVAPI switches whose variable is not a plain string literal.
+    pub switches_unread: usize,
+    /// The `use_nvapi` expression, when it is one this reader recognizes.
+    pub formula: Option<Formula>,
+    /// 1-based line of `config_info` that records `use_nvapi`.
+    pub recorded_line: Option<usize>,
 }
 
 impl Reading {
@@ -1031,7 +1035,14 @@ impl std::error::Error for Error {}
 pub fn scan(script: &str) -> Result<Reading, Error> {
     let lines = lex(script)?;
     let raw: Vec<&str> = script.lines().collect();
-    let mut reading = Reading::default();
+    let (switches, switches_unread) = environment::switches(&lines);
+    let mut reading = Reading {
+        switches,
+        switches_unread,
+        formula: environment::formula(&lines),
+        recorded_line: environment::recorded_line(&lines),
+        ..Reading::default()
+    };
 
     let header = function_line(&lines)?;
     let body = match header {
