@@ -27,6 +27,10 @@ use std::fmt;
 
 /// How deep nesting may go before it is treated as malformed.
 ///
+/// Exactly this many nested blocks parse and one more is an error, the same
+/// boundary [`heroic`](crate::heroic)'s JSON reader draws with the same
+/// constant.
+///
 /// The number is arbitrary; the bound is not. Steam's own files nest four
 /// levels at the most, so 64 is more headroom than any real document needs.
 /// Without *some* cap, a file of nothing but open braces overflows the stack,
@@ -403,7 +407,7 @@ impl<'a> Parser<'a> {
                 Some(b'[') => return Err(self.error(ErrorKind::PlatformConditional)),
                 Some(b'{') => {
                     let line = self.line;
-                    if depth + 1 >= MAX_DEPTH {
+                    if depth + 1 > MAX_DEPTH {
                         return Err(self.error(ErrorKind::TooDeep));
                     }
                     self.pos += 1;

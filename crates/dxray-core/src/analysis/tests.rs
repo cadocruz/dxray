@@ -561,14 +561,10 @@ fn the_graphics_question_the_report_asks_agrees_with_the_verdict_it_prints() {
     // The report's graphics/other split used to keep a prefix table of its own,
     // and the two disagreed: `amd_fidelityfx_dx12.dll` was reported as FSR in
     // one row and as non-graphical two rows below it. Anything this crate has a
-    // rule for answers yes here, by construction.
+    // rule an import table can trigger answers yes here, by construction.
     for name in [
         "amd_fidelityfx_dx12.dll",
         "AMD_FidelityFX_DX12.dll",
-        "dinput8.dll",
-        "winhttp.dll",
-        "xinput1_4.dll",
-        "version.dll",
         "vulkan-1.dll",
         "DXGI.dll",
         "dxcore.dll",
@@ -597,6 +593,83 @@ fn the_graphics_question_the_report_asks_agrees_with_the_verdict_it_prints() {
             "{name} is the crowd itself"
         );
     }
+}
+
+#[test]
+fn a_shadowable_name_that_draws_nothing_is_the_crowd_in_an_import_list() {
+    // A *file* of one of these names beside an executable is a mod loader. In
+    // an import table they are audio, input, HTTP and versioning, and ordinary
+    // games import them: `winmm.dll` was printed at the top of the row headed
+    // `graphics` in practically every report this tool produced.
+    for name in [
+        "winmm.dll",
+        "dsound.dll",
+        "dinput.dll",
+        "dinput8.dll",
+        "version.dll",
+        "winhttp.dll",
+        "xinput1_3.dll",
+        "xinput1_4.dll",
+    ] {
+        assert!(
+            super::is_shadowable(name),
+            "{name} has to stay a name a local file can shadow"
+        );
+        assert!(
+            !super::is_graphics_related(name),
+            "{name} draws nothing, so an import of it belongs with the crowd"
+        );
+        assert!(
+            analyse(&importing(&[name])).is_empty(),
+            "{name} imported must produce no finding, or the split would \
+             contradict the verdict above it"
+        );
+    }
+}
+
+#[test]
+fn every_shadowable_name_that_does_draw_is_still_pulled_out_of_the_crowd() {
+    // These are shadowable too, and they answer yes through `renderer` rather
+    // than through `PROXYABLE`. Dropping that list must not have taken them.
+    for name in [
+        "dxgi.dll",
+        "d3d12.dll",
+        "d3d11.dll",
+        "d3d10.dll",
+        "d3d9.dll",
+        "d3d8.dll",
+        "ddraw.dll",
+        "opengl32.dll",
+        "vulkan-1.dll",
+    ] {
+        assert!(
+            super::is_graphics_related(name),
+            "{name} names a graphics API, however else it is used"
+        );
+    }
+}
+
+#[test]
+fn a_shipped_agility_runtime_and_an_imported_d3d12_are_one_finding() {
+    // What a Direct3D name means lives in `renderer`. It was written twice —
+    // there and as a literal in the neighbours loop — and renaming it in the
+    // table left the literal behind with the whole suite green.
+    let verdict = analyse(&Evidence {
+        imports: vec!["d3d12.dll".to_owned()],
+        neighbours: vec!["D3D12Core.dll".to_owned()],
+        ..Evidence::default()
+    });
+
+    assert_eq!(
+        verdict.renderers.len(),
+        1,
+        "one API is one finding, however many files name it: {:?}",
+        verdict.renderers
+    );
+    assert_eq!(
+        evidence_for(&verdict.renderers, "Direct3D 12"),
+        ["d3d12.dll (import)", "D3D12Core.dll (neighbour)"]
+    );
 }
 
 #[test]

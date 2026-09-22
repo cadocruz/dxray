@@ -5,6 +5,7 @@
 //! verdict so a reader who disagrees with it can check the evidence without
 //! re-running anything.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use dxray_core::Source;
@@ -16,8 +17,8 @@ use crate::record::Record;
 const LABEL: usize = 10;
 /// Where a wrapped value continues, lined up under the first one.
 const INDENT: usize = 2 + LABEL;
-/// Wrap width. Terminals narrower than this exist; output that is impossible to
-/// scan on a normal one because it was built for them does not.
+/// Wrap width, counted in characters for the reason given on
+/// [`wrap::WIDTH`](crate::wrap::WIDTH).
 const WIDTH: usize = 80;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -145,15 +146,16 @@ fn render_body(out: &mut String, record: &Record) {
     // late is a property of the dependency, not a second list.
     let mut graphics = Vec::new();
     let mut other = Vec::new();
+    let named = named_by(verdict);
     for name in &record.imports {
-        pick(&mut graphics, &mut other, name, name.clone());
+        pick(&mut graphics, &mut other, &named, name, name.clone());
     }
     for name in &record.delay_imports {
         // `Source::as_str` and not a literal: the findings rows eight lines
         // above spell this fact through `Signal::describe`, and one record
         // carrying two spellings of one fact is the defect named below.
         let marked = format!("{name} ({})", Source::DelayImport.as_str());
-        pick(&mut graphics, &mut other, name, marked);
+        pick(&mut graphics, &mut other, &named, name, marked);
     }
 
     if graphics.is_empty() && other.is_empty() {
@@ -212,6 +214,24 @@ fn versions(record: &Record) -> String {
     }
 }
 
+/// Every library the verdict above quotes, lowercased.
+///
+/// A name in here already has a row further up, so filing it with the crowd
+/// would describe one library two ways in one block. `dinput8.dll` draws
+/// nothing, but a file of that name beside the executable is a reported
+/// override, and no rule about the name alone can know that.
+fn named_by(verdict: &dxray_core::Verdict) -> HashSet<String> {
+    verdict
+        .renderers
+        .iter()
+        .chain(&verdict.infrastructure)
+        .chain(&verdict.features)
+        .chain(&verdict.local_overrides)
+        .flat_map(|finding| &finding.signals)
+        .map(|signal| signal.library.to_ascii_lowercase())
+        .collect()
+}
+
 /// Files a name under the row it belongs in, asking `dxray-core` which one.
 ///
 /// `name` is the library as the import table spelled it; `text` is what the row
@@ -219,8 +239,14 @@ fn versions(record: &Record) -> String {
 /// `dxray-core`'s because the verdict printed above these rows answers it too,
 /// and a private table here is how a name got reported as a feature and as
 /// non-graphical in the same block.
-fn pick(graphics: &mut Vec<String>, other: &mut Vec<String>, name: &str, text: String) {
-    if is_graphics_related(name) {
+fn pick(
+    graphics: &mut Vec<String>,
+    other: &mut Vec<String>,
+    named: &HashSet<String>,
+    name: &str,
+    text: String,
+) {
+    if is_graphics_related(name) || named.contains(&name.to_ascii_lowercase()) {
         graphics.push(text);
     } else {
         other.push(text);
@@ -239,8 +265,9 @@ fn wrap(names: &[String]) -> String {
     let mut out = String::new();
     let mut column = INDENT;
     for (i, name) in names.iter().enumerate() {
+        let width = name.chars().count();
         if i > 0 {
-            if column + 2 + name.len() > WIDTH {
+            if column + 2 + width > WIDTH {
                 let _ = write!(out, "\n{:INDENT$}", "");
                 column = INDENT;
             } else {
@@ -249,7 +276,7 @@ fn wrap(names: &[String]) -> String {
             }
         }
         out.push_str(name);
-        column += name.len();
+        column += width;
     }
     out
 }

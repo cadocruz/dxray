@@ -14,7 +14,7 @@ const DIR_DELAY_IMPORT: usize = 13;
 
 /// A descriptor array is terminated by an all-zero entry. This caps the walk in
 /// case the terminator was lost to truncation or was never written.
-const MAX_DESCRIPTORS: usize = 4096;
+pub const MAX_DESCRIPTORS: usize = 4096;
 /// Longest DLL name accepted. Real ones are far shorter; this only stops a scan
 /// that would otherwise run to the end of the file.
 const MAX_NAME: usize = 256;
@@ -43,6 +43,11 @@ pub enum Error {
     /// than truncated, because a silently empty DLL name reads as "imports
     /// nothing" and that is a wrong answer wearing a valid one's clothes.
     UnterminatedName { at: usize },
+    /// A descriptor array ran for [`MAX_DESCRIPTORS`] entries without reaching
+    /// its all-zero terminator. Reported for the same reason as
+    /// [`Self::UnterminatedName`]: a truncated import list reads exactly like a
+    /// complete one.
+    UnterminatedDescriptors { at: usize },
     /// A resource directory entry pointed at a subdirectory where a leaf was
     /// expected, or the reverse.
     MalformedResourceTree { at: usize },
@@ -59,6 +64,11 @@ impl fmt::Display for Error {
             Self::UnterminatedName { at } => {
                 write!(f, "unterminated name at offset {at:#x}")
             }
+            Self::UnterminatedDescriptors { at } => write!(
+                f,
+                "descriptor array at offset {at:#x} ran past {MAX_DESCRIPTORS} entries \
+                 without its terminator"
+            ),
             Self::MalformedResourceTree { at } => {
                 write!(f, "malformed resource directory at offset {at:#x}")
             }
@@ -144,19 +154,24 @@ impl<'a> Pe<'a> {
             return Err(Error::NotPe);
         }
 
+        // Every offset below saturates for the reason given over `read_u16`:
+        // each is built from header fields, and on a 32-bit target `pe_offset`
+        // alone reaches the top of `usize`. A wrapped offset lands elsewhere in
+        // the file and still reads as a perfectly good header.
+        //
         // COFF header, 20 bytes, immediately after the 4-byte signature.
-        let coff = pe_offset + 4;
+        let coff = pe_offset.saturating_add(4);
         let machine = Machine::from_u16(read_u16(buf, coff)?);
-        let section_count = read_u16(buf, coff + 2)? as usize;
-        let optional_size = read_u16(buf, coff + 16)? as usize;
+        let section_count = read_u16(buf, coff.saturating_add(2))? as usize;
+        let optional_size = read_u16(buf, coff.saturating_add(16))? as usize;
 
-        let optional = coff + 20;
+        let optional = coff.saturating_add(20);
         let magic = read_u16(buf, optional)?;
         // The two layouts differ only in that PE32+ widens four fields, which
         // pushes the directory count and the directories themselves 16 bytes on.
         let (pe32_plus, dir_count_at) = match magic {
-            0x010b => (false, optional + 92),
-            0x020b => (true, optional + 108),
+            0x010b => (false, optional.saturating_add(92)),
+            0x020b => (true, optional.saturating_add(108)),
             other => return Err(Error::BadOptionalMagic(other)),
         };
 
@@ -170,8 +185,10 @@ impl<'a> Pe<'a> {
         // on the first that runs past the end, so what parses is unchanged.
         let mut directories = Vec::with_capacity(dir_count.min(MAX_DIRECTORIES));
         for i in 0..dir_count {
-            let at = dir_count_at + 4 + i * 8;
-            directories.push((read_u32(buf, at)?, read_u32(buf, at + 4)?));
+            let at = dir_count_at
+                .saturating_add(4)
+                .saturating_add(i.saturating_mul(8));
+            directories.push((read_u32(buf, at)?, read_u32(buf, at.saturating_add(4))?));
         }
 
         // Section headers follow the optional header, whose length the COFF
@@ -181,12 +198,14 @@ impl<'a> Pe<'a> {
         // reserved for section headers a 1 KB file cannot contain.
         let mut sections = Vec::with_capacity(section_count.min(buf.len() / SECTION_HEADER));
         for i in 0..section_count {
-            let at = optional + optional_size + i * SECTION_HEADER;
+            let at = optional
+                .saturating_add(optional_size)
+                .saturating_add(i.saturating_mul(SECTION_HEADER));
             sections.push(Section {
-                virtual_size: read_u32(buf, at + 8)?,
-                virtual_address: read_u32(buf, at + 12)?,
-                raw_size: read_u32(buf, at + 16)?,
-                raw_pointer: read_u32(buf, at + 20)?,
+                virtual_size: read_u32(buf, at.saturating_add(8))?,
+                virtual_address: read_u32(buf, at.saturating_add(12))?,
+                raw_size: read_u32(buf, at.saturating_add(16))?,
+                raw_pointer: read_u32(buf, at.saturating_add(20))?,
             });
         }
 
@@ -214,7 +233,8 @@ impl<'a> Pe<'a> {
     /// program's first instruction runs.
     ///
     /// # Errors
-    /// Returns [`Error`] when a descriptor or name runs outside the image.
+    /// Returns [`Error`] when a descriptor or name runs outside the image, or
+    /// when the array runs past [`MAX_DESCRIPTORS`] without its terminator.
     pub fn imports(&self) -> Result<Vec<String>> {
         // 20-byte IMAGE_IMPORT_DESCRIPTOR; the name RVA sits at +12.
         self.descriptor_names(DIR_IMPORT, 20, 12)
@@ -225,7 +245,8 @@ impl<'a> Pe<'a> {
     /// that delay-loads `d3d12.dll` imports nothing at all at startup.
     ///
     /// # Errors
-    /// Returns [`Error`] when a descriptor or name runs outside the image.
+    /// Returns [`Error`] when a descriptor or name runs outside the image, or
+    /// when the array runs past [`MAX_DESCRIPTORS`] without its terminator.
     pub fn delay_imports(&self) -> Result<Vec<String>> {
         // 32-byte IMAGE_DELAYLOAD_DESCRIPTOR; the name RVA sits at +4.
         self.descriptor_names(DIR_DELAY_IMPORT, 32, 4)
@@ -241,22 +262,26 @@ impl<'a> Pe<'a> {
 
         let mut names = Vec::new();
         for i in 0..MAX_DESCRIPTORS {
-            let step = u32::try_from(i * stride).unwrap_or(u32::MAX);
+            let step = u32::try_from(i.saturating_mul(stride)).unwrap_or(u32::MAX);
             let at = self.offset_of(rva.saturating_add(step))?;
             let descriptor = self
                 .buf
                 .get(at..at.saturating_add(stride))
                 .ok_or(Error::Truncated { at })?;
             if descriptor.iter().all(|&b| b == 0) {
-                break;
+                return Ok(names);
             }
             let name_rva = read_u32(descriptor, name_at)?;
             if name_rva == 0 {
-                break;
+                return Ok(names);
             }
             names.push(self.cstr_at_rva(name_rva)?);
         }
-        Ok(names)
+        // Both ways out of the loop are a terminator that was found, so
+        // falling past it means the list gathered is a prefix of the answer.
+        Err(Error::UnterminatedDescriptors {
+            at: self.offset_of(rva)?,
+        })
     }
 
     /// Translates an RVA to an index into the file, using the section that

@@ -362,6 +362,26 @@ fn nesting_without_end_is_an_error_and_not_a_stack_overflow() {
 }
 
 #[test]
+fn a_document_nested_exactly_to_the_bound_parses_and_one_level_past_it_does_not() {
+    // The check read `>=` where the constant documented the depth as allowed,
+    // so the reader refused one level shallower than it claimed. Built from the
+    // constant, so the fixture moves with it.
+    use super::MAX_DEPTH;
+
+    let nested = |levels: usize| format!("{}{}", "\"k\" {".repeat(levels), "}".repeat(levels));
+
+    assert!(
+        parse(&nested(MAX_DEPTH)).is_ok(),
+        "a document nested exactly {MAX_DEPTH} deep is within the bound"
+    );
+    assert_eq!(
+        error(&nested(MAX_DEPTH + 1)).kind,
+        ErrorKind::TooDeep,
+        "and one level past it is refused"
+    );
+}
+
+#[test]
 fn the_reported_column_counts_characters_rather_than_bytes() {
     // The number is there so a person can put a cursor on the fault. A byte
     // column is wrong by the width of every non-ASCII character before it,

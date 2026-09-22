@@ -383,7 +383,8 @@ fn settle_missing_installs(scan: &mut Scan) {
         // to say both halves or a reader cannot tell a stale cache entry from a
         // game this tool lost.
         notes.push(format!(
-            "{problem}; {title:?} was found from another source, so nothing is missing              from this listing"
+            "{problem}; {title:?} was found from another source, so nothing is \
+             missing from this listing"
         ));
         false
     });
@@ -626,7 +627,10 @@ impl Json {
 /// scan instead of producing one [`Error::Json`].
 const MAX_DEPTH: usize = 64;
 
+/// Byte cursor over the document, with the text beside it so a multi-byte
+/// character can be decoded from its own bytes.
 struct JsonParser<'a> {
+    text: &'a str,
     input: &'a [u8],
     at: usize,
 }
@@ -634,6 +638,7 @@ struct JsonParser<'a> {
 impl<'a> JsonParser<'a> {
     const fn new(input: &'a str) -> Self {
         Self {
+            text: input,
             input: input.as_bytes(),
             at: 0,
         }
@@ -787,14 +792,17 @@ impl<'a> JsonParser<'a> {
                 0..=31 => return Err("control byte in string".to_owned()),
                 byte if byte.is_ascii() => out.push(char::from(byte)),
                 _ => {
+                    // This validated the whole remaining input, once per
+                    // accented letter, which is quadratic in a cache file full
+                    // of them. `str::get` rather than an index, so a cursor
+                    // left on a character boundary errors instead of panicking.
                     let start = self.at - 1;
-                    let text = std::str::from_utf8(&self.input[start..])
-                        .map_err(|_| "invalid UTF-8 in string".to_owned())?;
-                    let character = text
-                        .chars()
-                        .next()
-                        .ok_or_else(|| "unterminated string".to_owned())?;
-                    self.at += character.len_utf8() - 1;
+                    let character = self
+                        .text
+                        .get(start..)
+                        .and_then(|rest| rest.chars().next())
+                        .ok_or_else(|| "invalid UTF-8 in string".to_owned())?;
+                    self.at = start + character.len_utf8();
                     out.push(character);
                 }
             }
@@ -886,7 +894,8 @@ mod tests {
         let note = scan.notes.first().expect("the record is still reported");
         assert!(
             note.contains("has no install_path") && note.contains("another source"),
-            "and the note says both halves, or a stale entry and a lost game              read alike: {note:?}"
+            "and the note says both halves, or a stale entry and a lost game \
+             read alike: {note:?}"
         );
     }
 

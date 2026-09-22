@@ -1826,6 +1826,11 @@ fn to_end_of_line(bytes: &[u8], mut at: usize) -> usize {
 /// Reads one string literal, returning its token, the byte after it, and the
 /// line the reader ended on.
 ///
+/// `at` is the opening quote: both callers have already seen one there, the
+/// prefixed form because [`Lexer::name`] steps over the prefix first. Checked
+/// rather than assumed — this was a forward scan with no bound if there was
+/// none.
+///
 /// `prefixed` makes the value opaque whatever the body says, because the value
 /// of an `f`, `r` or `b` string is not its body.
 ///
@@ -1841,15 +1846,14 @@ fn read_string(
     prefixed: bool,
 ) -> Result<(Token, usize, usize), Error> {
     let bytes = script.as_bytes();
-    // The opening quote is either at `at` or, for a prefixed literal, just
-    // after the prefix the caller has already stepped over.
-    let mut open = at;
-    while !matches!(bytes.get(open), Some(b'"' | b'\'')) {
-        open += 1;
-    }
-    let quote = bytes[open];
-    let triple = bytes.get(open + 1) == Some(&quote) && bytes.get(open + 2) == Some(&quote);
-    let body = open + if triple { 3 } else { 1 };
+    let Some(&quote @ (b'"' | b'\'')) = bytes.get(at) else {
+        return Err(Error {
+            kind: ErrorKind::UnterminatedString,
+            line,
+        });
+    };
+    let triple = bytes.get(at + 1) == Some(&quote) && bytes.get(at + 2) == Some(&quote);
+    let body = at + if triple { 3 } else { 1 };
     let opened = line;
     let mut line = line;
     let mut i = body;

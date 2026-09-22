@@ -231,6 +231,11 @@ pub fn roots() -> Vec<PathBuf> {
     out
 }
 
+/// The candidates that are Steam installs, first spelling of each kept.
+///
+/// One pass, compared by [`identity`]. A second pass comparing the paths
+/// literally used to follow this one and could never remove anything, since
+/// two candidates spelled the same way answer `identity` the same way.
 fn existing_roots(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -242,8 +247,6 @@ fn existing_roots(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
             out.push(candidate);
         }
     }
-    let mut seen = HashSet::new();
-    out.retain(|path| seen.insert(path.clone()));
     out
 }
 

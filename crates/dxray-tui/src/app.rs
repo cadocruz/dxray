@@ -17,9 +17,20 @@ pub(crate) enum Focus {
 
 /// State that is safe to mutate on the terminal thread.
 pub struct App {
-    pub(crate) entries: Vec<Entry>,
+    /// Every game the scan has delivered, in arrival order. Private, because
+    /// `order` is derived from it and a write from outside leaves that stale.
+    entries: Vec<Entry>,
     /// Text entered by the user to narrow the library by game name or `AppID`.
-    pub(crate) filter: String,
+    filter: String,
+    /// `filter`, lowercased once rather than on every comparison.
+    needle: String,
+    /// The display order: indices into `entries`, evidence-carrying first.
+    /// Rebuilt by [`App::reindex`], the only thing that may follow a write to
+    /// `entries` or `filter`.
+    order: Vec<usize>,
+    /// How many of `order` carry evidence, so the section break is a field
+    /// rather than a scan.
+    evidence_group: usize,
     /// An index into `entries`, never into the transient filtered list.
     pub(crate) selected: Option<usize>,
     pub(crate) offset: usize,
@@ -29,6 +40,12 @@ pub struct App {
     pub(crate) focus: Focus,
     pub(crate) width: u16,
     pub(crate) height: u16,
+    /// Rows the list can show and rows the detail pane can scroll, for the
+    /// current terminal size. Cached because `layout` runs ratatui's constraint
+    /// solver at 82µs a call, and the offset search below asks once per
+    /// candidate offset — most of the cost of an arriving game.
+    list_rows: usize,
+    detail_rows: usize,
     pub(crate) roots: usize,
     pub(crate) libraries: usize,
     pub(crate) problems: Vec<ScanMessage>,
@@ -67,10 +84,13 @@ impl ScanMessage {
 
 impl App {
     #[must_use]
-    pub const fn new(height: u16) -> Self {
-        Self {
+    pub fn new(height: u16) -> Self {
+        let mut app = Self {
             entries: Vec::new(),
             filter: String::new(),
+            needle: String::new(),
+            order: Vec::new(),
+            evidence_group: 0,
             selected: None,
             offset: 0,
             detail_offset: 0,
@@ -78,18 +98,49 @@ impl App {
             focus: Focus::List,
             width: 80,
             height,
+            list_rows: 0,
+            detail_rows: 0,
             roots: 0,
             libraries: 0,
             problems: Vec::new(),
             finished: false,
             quitting: false,
             spinner: SpinnerState::new(),
-        }
+        };
+        app.measure();
+        app
+    }
+
+    /// Recomputes the geometry the reducer clamps against. The only thing that
+    /// may follow a write to `width` or `height`.
+    fn measure(&mut self) {
+        self.list_rows = layout::list_rows(self.width, self.height);
+        self.detail_rows = layout::detail_rows(self.width, self.height);
     }
 
     #[must_use]
     pub const fn should_quit(&self) -> bool {
         self.quitting
+    }
+
+    /// What the user has typed to narrow the library.
+    #[must_use]
+    pub(crate) fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// How many games the scan has delivered, before any filtering.
+    #[must_use]
+    pub(crate) fn total(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Replaces the filter as typing it would, for tests that assert on a
+    /// rendered screen rather than on the keys behind it.
+    #[cfg(test)]
+    pub(crate) fn set_filter(&mut self, filter: &str) {
+        self.filter = filter.to_owned();
+        self.filter_changed();
     }
 
     #[must_use]
@@ -99,7 +150,7 @@ impl App {
 
     #[must_use]
     pub(crate) fn filtered_len(&self) -> usize {
-        self.filtered_indices().count()
+        self.order.len()
     }
 
     #[must_use]
@@ -112,14 +163,11 @@ impl App {
     }
 
     pub(crate) fn evidence_group_len(&self) -> usize {
-        self.filtered_indices()
-            .take_while(|&index| !self.entries[index].lacks_evidence())
-            .count()
+        self.evidence_group
     }
 
     pub(crate) fn no_evidence_len(&self) -> usize {
-        self.filtered_len()
-            .saturating_sub(self.evidence_group_len())
+        self.order.len().saturating_sub(self.evidence_group)
     }
 
     fn visible_entry_count_from(&self, offset: usize) -> usize {
@@ -127,7 +175,7 @@ impl App {
         if offset >= length {
             return 0;
         }
-        let mut rows = layout::list_rows(self.width, self.height);
+        let mut rows = self.list_rows;
         if self.width >= layout::SPLIT_WIDTH {
             rows = rows.saturating_sub(1);
         }
@@ -182,26 +230,28 @@ impl App {
     /// into it — keeps pointing at the same game when an arrival changes the
     /// order on screen.
     fn filtered_indices(&self) -> impl Iterator<Item = usize> + '_ {
-        let needle = self.filter.to_lowercase();
-        let second = needle.clone();
-        let with_evidence = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(move |(_, entry)| entry.matches(&needle) && !entry.lacks_evidence())
-            .map(|(index, _)| index);
-        let without_evidence = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(move |(_, entry)| entry.matches(&second) && entry.lacks_evidence())
-            .map(|(index, _)| index);
-        with_evidence.chain(without_evidence)
+        self.order.iter().copied()
+    }
+
+    /// Rebuilds the display order.
+    fn reindex(&mut self) {
+        self.needle = self.filter.to_lowercase();
+        let needle = &self.needle;
+        let entries = &self.entries;
+        let mut order: Vec<usize> = (0..entries.len())
+            .filter(|&index| entries[index].matches(needle) && !entries[index].lacks_evidence())
+            .collect();
+        self.evidence_group = order.len();
+        order
+            .extend((0..entries.len()).filter(|&index| {
+                entries[index].matches(needle) && entries[index].lacks_evidence()
+            }));
+        self.order = order;
     }
 
     pub(crate) fn selected_position(&self) -> Option<usize> {
-        self.selected
-            .and_then(|selected| self.filtered_indices().position(|index| index == selected))
+        let selected = self.selected?;
+        self.order.iter().position(|&index| index == selected)
     }
 
     fn select(&mut self, position: usize) {
@@ -211,10 +261,7 @@ impl App {
             self.detail_offset = 0;
             return;
         };
-        let index = self
-            .filtered_indices()
-            .nth(position.min(last))
-            .expect("a filtered position below its measured length must exist");
+        let index = self.order[position.min(last)];
         if self.selected != Some(index) {
             self.evidence_expanded = false;
         }
@@ -245,6 +292,7 @@ impl App {
     }
 
     fn filter_changed(&mut self) {
+        self.reindex();
         self.evidence_expanded = false;
         self.detail_offset = 0;
         if self.selected_position().is_none() {
@@ -256,7 +304,7 @@ impl App {
     }
 
     fn detail_page(&mut self, delta: isize) {
-        let page = layout::detail_rows(self.width, self.height);
+        let page = self.detail_rows;
         self.detail_offset = if delta.is_negative() {
             self.detail_offset.saturating_sub(page)
         } else {
@@ -270,9 +318,7 @@ impl App {
     }
 
     fn clamp_detail_offset(&mut self) {
-        let max = self
-            .detail_line_count()
-            .saturating_sub(layout::detail_rows(self.width, self.height));
+        let max = self.detail_line_count().saturating_sub(self.detail_rows);
         self.detail_offset = self.detail_offset.min(max);
     }
 
@@ -345,6 +391,7 @@ impl Model for App {
             Msg::Resize(width, height) => {
                 self.width = width;
                 self.height = height;
+                self.measure();
                 self.keep_selection_visible();
                 self.clamp_detail_offset();
             }
@@ -356,6 +403,7 @@ impl Model for App {
             }
             Msg::Game(entry) => {
                 self.entries.push(*entry);
+                self.reindex();
                 if self.selected.is_none() && self.selected_position().is_none() {
                     self.select(0);
                 } else {
@@ -626,14 +674,14 @@ mod tests {
         add(&mut app, 440, "Quake");
         app.update(Msg::Key(Key::Char('q')));
         assert!(!app.should_quit());
-        assert_eq!(app.filter, "q");
+        assert_eq!(app.filter(), "q");
         assert_eq!(
             app.selected_entry().map(|entry| entry.name.as_str()),
             Some("Quake")
         );
 
         app.update(Msg::Key(Key::Escape));
-        assert_eq!(app.filter, "");
+        assert_eq!(app.filter(), "");
         assert!(!app.should_quit());
         app.update(Msg::Key(Key::Escape));
         assert!(app.should_quit());
@@ -674,7 +722,7 @@ mod tests {
         app.update(Msg::Key(Key::Down));
         app.update(Msg::Key(Key::Char('c')));
         app.update(Msg::Key(Key::Char('O')));
-        assert_eq!(app.filter, "cO");
+        assert_eq!(app.filter(), "cO");
         assert_eq!(app.filtered_len(), 1);
         assert_eq!(
             app.selected_entry()
@@ -715,7 +763,7 @@ mod tests {
         assert_eq!(app.offset, 0);
 
         app.update(Msg::Key(Key::Escape));
-        assert_eq!(app.filter, "");
+        assert_eq!(app.filter(), "");
         assert_eq!(
             app.selected_entry().map(|entry| entry.name.as_str()),
             Some("Alpha")
@@ -759,7 +807,7 @@ mod tests {
         assert_eq!(app.filtered_len(), 1);
         assert_eq!(app.selected, selected);
         app.update(Msg::Key(Key::Backspace));
-        assert_eq!(app.filter, "4");
+        assert_eq!(app.filter(), "4");
         assert_eq!(app.selected, selected);
     }
 

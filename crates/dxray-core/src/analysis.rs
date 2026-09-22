@@ -404,10 +404,13 @@ pub fn analyse(evidence: &Evidence) -> Verdict {
     if !looks_like_system_directory(&evidence.neighbours) {
         for name in &evidence.neighbours {
             let lower = name.to_ascii_lowercase();
-            if lower == D3D12_CORE {
-                // The one file whose presence in a game directory is a renderer
-                // signal rather than an injector: see `D3D12_CORE`.
-                renderers.add("Direct3D 12", 1, name, Source::Neighbour);
+            // The one file whose presence in a game directory is a renderer
+            // signal rather than an injector: see `D3D12_CORE`. The label and
+            // rank come from `renderer`, not from a second copy of them here.
+            if lower == D3D12_CORE
+                && let Some((label, rank)) = renderer(&lower)
+            {
+                renderers.add(label, rank, name, Source::Neighbour);
             } else if is_shadowable(&lower) {
                 local_overrides.add(LOCAL_OVERRIDE, proxy_rank(&lower), name, Source::Neighbour);
             } else if let Some((label, rank)) = feature(&lower) {
@@ -594,16 +597,21 @@ const GRAPHICS_PREFIXES: &[&str] = &[
 ///
 /// The question belongs here and not in a surface, because the answer has to
 /// agree with the verdict printed above the list: every name this crate has a
-/// rule for says yes, and the prefix table above only widens that. A surface
-/// with a prefix table of its own is how the same `amd_fidelityfx_dx12.dll`
-/// came to be reported as FSR and as non-graphical in one block.
+/// rule for *that an import table can trigger* says yes, and the prefix table
+/// above only widens that. A surface with a prefix table of its own is how the
+/// same `amd_fidelityfx_dx12.dll` came to be reported as FSR and as
+/// non-graphical in one block.
+///
+/// [`PROXYABLE`] is not consulted: it answers a question about a directory
+/// listing, and eight of its entries are audio, input, HTTP and versioning
+/// libraries that ordinary games import. None of the eight produces a finding,
+/// and the shadowable names that do draw are in [`renderer`].
 #[must_use]
 pub fn is_graphics_related(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     renderer(&lower).is_some()
         || shared(&lower).is_some()
         || feature(&lower).is_some()
-        || PROXYABLE.contains(&lower.as_str())
         || GRAPHICS_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 

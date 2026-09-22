@@ -4,7 +4,7 @@ use common::{
     DIRECTORIES, DIRECTORY_COUNT, FIRST_SECTION_HEADER, IMPORT_DIRECTORY, Image, OPTIONAL_MAGIC,
     put16, put32,
 };
-use dxray_pe::{Error, Machine, Pe};
+use dxray_pe::{Error, MAX_DESCRIPTORS, Machine, Pe};
 
 #[test]
 fn reads_the_import_table_of_a_64_bit_image() {
@@ -120,5 +120,36 @@ fn a_directory_count_no_file_could_hold_is_an_error_rather_than_an_allocation() 
     assert!(
         matches!(err, Error::Truncated { .. }),
         "the walk stops where the file does, got {err:?}"
+    );
+}
+
+#[test]
+fn a_descriptor_array_that_never_terminates_is_an_error_rather_than_a_short_list() {
+    // A truncated import list reads exactly like a complete one, so a binary
+    // whose `d3d12.dll` sat past the bound came back "no graphics API
+    // determined" with nothing saying why. Built from the constant.
+    let names = vec!["engine.dll"; MAX_DESCRIPTORS + 1];
+    let buf = Image::x64().importing(&names).build();
+    let pe = Pe::parse(&buf).unwrap();
+
+    let error = pe.imports().expect_err("the array runs past the bound");
+
+    assert!(
+        matches!(error, Error::UnterminatedDescriptors { .. }),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn a_descriptor_array_ending_exactly_at_the_bound_still_reads() {
+    let names = vec!["engine.dll"; MAX_DESCRIPTORS - 1];
+    let buf = Image::x64().importing(&names).build();
+    let pe = Pe::parse(&buf).unwrap();
+
+    assert_eq!(
+        pe.imports()
+            .expect("the terminator is within the bound")
+            .len(),
+        MAX_DESCRIPTORS - 1
     );
 }

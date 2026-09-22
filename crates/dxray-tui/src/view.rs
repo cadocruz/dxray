@@ -175,12 +175,7 @@ fn render_header(
                 ),
                 Span::styled(format!(" N:{notes}"), theme.muted),
                 Span::styled(
-                    format!(
-                        "  E:{} L:{} R:{}",
-                        app.entries.len(),
-                        app.libraries,
-                        app.roots
-                    ),
+                    format!("  E:{} L:{} R:{}", app.total(), app.libraries, app.roots),
                     theme.muted,
                 ),
             ]),
@@ -215,7 +210,7 @@ fn render_header(
             Span::styled(
                 format!(
                     "  Entries: {}  Libraries: {}  Roots: {}",
-                    app.entries.len(),
+                    app.total(),
                     app.libraries,
                     app.roots
                 ),
@@ -244,11 +239,11 @@ fn small_header_line(
     let status = if app.finished { "done" } else { "scan" };
     let brand_and_status = format!("dxray {status} ");
     let diagnostics = format!("P{problems} N{notes} ");
-    let results = format!("{}/{} [", app.filtered_len(), app.entries.len());
-    let query = if app.filter.is_empty() {
+    let results = format!("{}/{} [", app.filtered_len(), app.total());
+    let query = if app.filter().is_empty() {
         "filter"
     } else {
-        &app.filter
+        app.filter()
     };
     let available = usize::from(width).saturating_sub(
         Line::from(brand_and_status.as_str()).width()
@@ -299,15 +294,15 @@ fn query_tail(query: &str, width: usize) -> String {
 
 fn search_line(app: &App, width: u16, theme: &BubbleTheme, counts: bool) -> Line<'static> {
     let prefix = if counts {
-        format!("Search {}/{}: [", app.filtered_len(), app.entries.len())
+        format!("Search {}/{}: [", app.filtered_len(), app.total())
     } else {
         "Search: [".to_owned()
     };
     let suffix = if counts { "] · Esc clear" } else { "]" };
-    let query = if app.filter.is_empty() {
+    let query = if app.filter().is_empty() {
         "type name or AppID"
     } else {
-        &app.filter
+        app.filter()
     };
     let available = usize::from(width)
         .saturating_sub(Line::from(prefix.as_str()).width() + Line::from(suffix).width());
@@ -325,10 +320,10 @@ fn render_list(
     area: ratatui::layout::Rect,
     terminal_width: u16,
 ) {
-    let mut title = if app.filter.is_empty() {
-        format!("Entries ({})", app.entries.len())
+    let mut title = if app.filter().is_empty() {
+        format!("Entries ({})", app.total())
     } else {
-        format!("Entries ({} of {})", app.filtered_len(), app.entries.len())
+        format!("Entries ({} of {})", app.filtered_len(), app.total())
     };
     if app.focus == Focus::List {
         title.push_str(" · active");
@@ -348,12 +343,12 @@ fn render_list(
         return;
     }
     let entries = app.visible_entries();
-    if entries.is_empty() && !app.filter.is_empty() {
+    if entries.is_empty() && !app.filter().is_empty() {
         render_if_visible(
             frame,
             Paragraph::new(format!(
                 "No matches; Esc clears search.\n\"{}\"",
-                query_tail(&app.filter, usize::from(inner.width).saturating_sub(2))
+                query_tail(app.filter(), usize::from(inner.width).saturating_sub(2))
             ))
             .style(theme.muted),
             inner,
@@ -629,7 +624,7 @@ fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
         || {
             if compact {
                 return vec![Line::from(clip_text(
-                    if app.filter.is_empty() {
+                    if app.filter().is_empty() {
                         "Selected: waiting for discovery"
                     } else {
                         "Selected: no filter match"
@@ -639,7 +634,7 @@ fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
             }
             vec![
                 Line::from("Identity / origin:").style(Modifier::BOLD),
-                Line::from(if app.filter.is_empty() {
+                Line::from(if app.filter().is_empty() {
                     "Waiting for a game to be discovered."
                 } else {
                     "No selected game matches the current filter."
@@ -1115,15 +1110,15 @@ mod tests {
                         assert!(screen.contains(heading), "{width}: {screen}");
                     }
                 }
-                app.filter = "example".into();
+                app.set_filter("example");
                 let screen = draw(&app, width, 24);
                 assert!(screen.contains("Entries (1 of 1)"), "{screen}");
                 assert_eq!(app.selected, selected);
-                app.filter = "absent".into();
+                app.set_filter("absent");
                 let screen = draw(&app, width, 24);
                 assert!(screen.contains("Entries (0 of 1)"), "{screen}");
                 assert!(screen.contains("No matches"));
-                app.filter.clear();
+                app.set_filter("");
             }
         }
     }
@@ -1469,7 +1464,7 @@ mod tests {
             app.update(Msg::Game(Box::new(game())));
             app.update(Msg::test_problem("unreadable library"));
             app.update(Msg::test_note("duplicate library"));
-            app.filter = format!("{}END", "銀河".repeat(80));
+            app.set_filter(&format!("{}END", "銀河".repeat(80)));
 
             let screen = draw(&app, width, 24);
             let lines = screen.lines().collect::<Vec<_>>();
@@ -1519,7 +1514,7 @@ mod tests {
                 assert!(lines[1].contains("Search 0/1:"), "{width}: {screen}");
             }
 
-            app.filter.clear();
+            app.set_filter("");
             app.update(Msg::Key(crate::Key::Tab));
             app.update(Msg::Key(crate::Key::End));
             let diagnostics = draw(&app, width, 24);
