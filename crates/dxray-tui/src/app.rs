@@ -37,10 +37,7 @@ pub struct App {
     pub(crate) spinner: SpinnerState,
 }
 
-/// A non-fatal diagnostic emitted while discovering a Steam library.
-///
-/// Keeping its kind alongside the original text means the view can explain
-/// whether it is an unreadable input or a caveat from a successfully read one.
+/// A discovery diagnostic retaining whether it is a problem or a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ScanMessage {
     Problem(ScanDiagnostic),

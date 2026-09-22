@@ -212,29 +212,11 @@ fn spawn_scan(
     })
 }
 
-/// Streams every launcher's games down the channel. `false` means the UI has
-/// gone away or cancellation was requested, so the worker must stop silently.
+/// Streams [`dxray_core::walk`] events to the UI.
 ///
-/// The traversal itself is [`dxray_core::walk`], shared with `dxray --installed`.
-/// What is here is this consumer's reaction to it: each thing found goes down
-/// the channel as it is found, so the list fills while the scan is still
-/// running. The command line's reaction to the same walk is to accumulate rows
-/// and print when it returns. Before the walk moved into the core crate these
-/// were two loops with a copy each of the library dedup rule, free to drift.
-///
-/// One loop for every launcher, which it can only be because
-/// [`heroic::roots`](dxray_core::heroic::roots) answers "is Heroic installed
-/// here" rather than "did a scan of it find anything". This scan used to carry
-/// a guard that announced a Heroic root only once its scan had produced a game,
-/// and that guard reported two identical situations differently: an empty Steam
-/// library was counted and an installed Heroic with nothing installed
-/// disappeared. Both are now counted, because both are somewhere games would be
-/// if the user had any.
-///
-/// Takes the launchers rather than calling [`launcher::all`](dxray_core::launcher::all)
-/// itself, so a test can hand it a launcher whose libraries hold no games —
-/// the case the removed guard silenced, and the one no real machine can be
-/// relied upon to have.
+/// The TUI must emit while discovery runs; it does not collect an `Inventory`.
+/// `false` means cancellation or a closed receiver. Injected launchers cover
+/// empty installations in tests.
 fn scan_launchers(
     launchers: &[&dyn dxray_core::Launcher],
     cancellation: &Cancellation,
@@ -249,14 +231,9 @@ fn scan_launchers(
     dxray_core::walk(launchers, &mut stream).is_continue()
 }
 
-/// Sends each thing the walk finds to the running UI.
+/// Converts walk events to UI messages.
 ///
-/// Every method stops the walk — [`ControlFlow::Break`] — when cancellation has
-/// been requested or the channel has gone away, which is the same "return
-/// false" the hand-written loop used to do at every one of these points. The
-/// flag is polled between filesystem operations, because that is where these
-/// methods are called from, so pressing Esc during a walk on a stale mount
-/// still stops it at the next boundary.
+/// Cancellation and a closed receiver stop the walk at its next event boundary.
 struct Stream<'a> {
     cancellation: &'a Cancellation,
     handle: &'a ProgramHandle<Msg>,

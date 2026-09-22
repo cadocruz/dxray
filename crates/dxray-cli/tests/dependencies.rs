@@ -1,37 +1,8 @@
-//! The firewall: `dxray` does not gain a terminal library.
+//! Dependency firewall for the scriptable `dxray` binary.
 //!
-//! This slice takes the project from one dependency to sixty-eight. `dxray` is
-//! the binary that goes in other people's scripts, and the argument for it has
-//! always partly been that there is almost nothing behind it. A terminal
-//! interface is worth having and is not worth spending that on, which is why it
-//! is a second binary — and an intention nobody checks is an intention that
-//! gets edited away by the next person who finds a `--tui` flag convenient.
-//!
-//! # Why the lockfile rather than `cargo tree`
-//!
-//! Shelling out to `cargo tree` in a test makes the test depend on a network,
-//! on a registry index, and on the exit code of a subprocess. `Cargo.lock` is
-//! checked in, is the resolver's own answer, and is a file. Parsing the few
-//! lines of it that matter costs less than handling the ways a subprocess
-//! fails, and it fails in the right direction: if the lockfile is missing or
-//! unparseable the test fails rather than passing vacuously.
-//!
-//! # What it is strict about, on purpose
-//!
-//! A lockfile entry does not distinguish a normal dependency from a
-//! development one, so a `dev-dependency` on ratatui in `dxray-cli` would fail
-//! this test even though it would never be linked into the shipped binary.
-//! That is the wanted behaviour and not a limitation worked around: the point
-//! is that building and testing `dxray` stays cheap, and a dev-dependency costs
-//! exactly as much to compile as a real one.
-//!
-//! # Why it lives here
-//!
-//! Beside the crate it protects, and not beside `dxray-tui`, so that `cargo
-//! test -p dxray-cli` runs the guarantee and deleting the terminal interface
-//! does not delete the thing guarding the binary that goes in scripts. It was
-//! parked in `crates/dxray-tui/tests/` while that crate was excluded from the
-//! workspace; it is a member now, and the reason expired with the exclusion.
+//! It reads the checked-in lockfile rather than shelling out to `cargo tree`.
+//! Terminal dependencies, including dev-dependencies, are intentionally
+//! rejected so CLI builds and tests remain small.
 
 use std::collections::{HashMap, HashSet};
 

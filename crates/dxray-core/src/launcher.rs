@@ -193,16 +193,8 @@ pub struct Game {
     pub identity: Identity,
     /// The title as the launcher stores it, which is UTF-8 and often not ASCII.
     pub name: String,
-    /// The directory the game is installed in, resolved to an absolute path.
-    ///
-    /// **Whether it exists is launcher-defined and deliberately so.** Steam
-    /// hands back the path its manifest declares without checking, because a
-    /// game mid-download names a directory that is not there yet and that is a
-    /// fact worth reporting rather than a reason to drop the entry. Heroic
-    /// checks, because its cache outlives the games it describes and a record
-    /// pointing at a deleted directory is stale metadata, not an install. Both
-    /// are right about their own file format; nothing here should flatten them
-    /// into one rule.
+    /// Absolute install directory. Existence follows launcher policy: Steam
+    /// preserves its manifest; Heroic rejects stale cache records.
     pub install_dir: PathBuf,
     /// The launcher, and backend, this came from.
     pub origin: Origin,
@@ -210,14 +202,12 @@ pub struct Game {
 
 /// One game in a completed launcher inventory.
 ///
-/// This is the presentation-neutral result of a full [`walk`].  The game keeps
-/// the identity and origin supplied by its launcher; `library` records the
-/// location that makes Steam's Proton policy meaningful and lets consumers
-/// present the same inventory without reconstructing that relationship.
+/// Presentation-neutral result of a full [`walk`].
+///
+/// `library` preserves the location needed for Steam's Proton policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InventoryEntry {
-    /// The launcher installation that led to this game, when the collector was
-    /// driven through [`walk`].
+    /// The launcher installation that led to this game.
     pub root: Option<PathBuf>,
     pub game: Game,
     pub library: PathBuf,
@@ -234,8 +224,7 @@ pub struct InventoryRoot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InventoryLibrary {
     pub origin: Origin,
-    /// `None` preserves an out-of-order direct [`Visitor`] call rather than
-    /// inventing a launcher installation for it.
+    /// `None` preserves an out-of-order [`Visitor`] call without inventing a root.
     pub root: Option<PathBuf>,
     pub path: PathBuf,
 }
@@ -252,11 +241,8 @@ pub struct InventoryDiagnostic {
 
 /// A completed, presentation-neutral inventory.
 ///
-/// Command-line and terminal consumers normally implement [`Visitor`]
-/// directly: the command line renders as it accumulates and the TUI streams
-/// events while discovery is still in progress.  This collector exists for
-/// callers and tests that need the stable facts produced by the shared walk,
-/// rather than either presentation.
+/// Consumers normally implement [`Visitor`] directly. This collector is for
+/// callers and tests that need the complete facts from the shared walk.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Inventory {
     pub roots: Vec<InventoryRoot>,
@@ -268,10 +254,7 @@ pub struct Inventory {
 }
 
 impl Inventory {
-    /// Collect every game delivered by the shared launcher walk.
-    ///
-    /// Unlike a UI visitor this collector never cancels, so a returned value
-    /// always represents the complete traversal of the launchers supplied.
+    /// Collects the complete shared launcher walk without cancellation.
     #[must_use]
     pub fn collect(launchers: &[&dyn Launcher]) -> Self {
         let mut inventory = Self::default();
