@@ -551,6 +551,7 @@ struct Fake {
     /// the two apart is the whole of what the trailer's two note clauses rest
     /// on.
     index_notes: Vec<String>,
+    index_problems: Vec<String>,
     problems: Vec<String>,
 }
 
@@ -562,6 +563,7 @@ impl Fake {
             games: Vec::new(),
             notes: Vec::new(),
             index_notes: Vec::new(),
+            index_problems: Vec::new(),
             problems: Vec::new(),
         }
     }
@@ -584,7 +586,7 @@ impl Launcher for Fake {
         dxray_core::Libraries {
             paths: vec![root.to_path_buf()],
             notes: self.index_notes.clone(),
-            ..dxray_core::Libraries::default()
+            problems: self.index_problems.clone(),
         }
     }
 
@@ -605,35 +607,75 @@ fn inventory_json_rows(launchers: &[&dyn Launcher]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-#[test]
-fn listing_json_preserves_the_core_inventory_contract() {
-    let steam_library = PathBuf::from("/dxray-cli-contract/steam");
-    let heroic_library = PathBuf::from("/dxray-cli-contract/heroic");
-    let steam = Fake {
-        origin: dxray_core::steam::ORIGIN,
-        roots: vec![steam_library.clone()],
-        games: vec![Game {
-            identity: Identity::SteamApp(570),
-            name: "Dota 2".to_owned(),
-            install_dir: steam_library.join("steamapps/common/dota 2 beta"),
-            origin: dxray_core::steam::ORIGIN,
-        }],
-        ..Fake::new("steam")
-    };
-    let heroic = Fake {
-        origin: dxray_core::heroic::ORIGIN,
-        roots: vec![heroic_library.clone()],
-        games: vec![Game {
-            identity: Identity::Native("heroic-hades".to_owned()),
-            name: "Hades".to_owned(),
-            install_dir: PathBuf::from("/games/Hades"),
-            origin: dxray_core::Origin::new("heroic", "Heroic / GOG"),
-        }],
-        ..Fake::new("heroic")
-    };
-    let launchers: [&dyn Launcher; 2] = [&steam, &heroic];
+#[derive(Debug, PartialEq, Eq)]
+struct JsonDiagnostic {
+    kind: String,
+    origin: String,
+    origin_label: String,
+    install: Option<String>,
+    library: Option<String>,
+    cause: Option<String>,
+    label: String,
+    says: String,
+}
 
-    let inventory = dxray_core::Inventory::collect(&launchers);
+fn expected_diagnostics(
+    diagnostics: &[dxray_core::InventoryDiagnostic],
+    kind: &str,
+) -> Vec<JsonDiagnostic> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let is_catalogue = diagnostic.library.is_some();
+            JsonDiagnostic {
+                kind: kind.to_owned(),
+                origin: diagnostic.origin.key().to_owned(),
+                origin_label: diagnostic.origin.label().to_owned(),
+                install: diagnostic
+                    .root
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                library: diagnostic
+                    .library
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                cause: match kind {
+                    "note" if is_catalogue => Some("record".to_owned()),
+                    "note" => Some("index".to_owned()),
+                    _ => None,
+                },
+                label: match (kind, is_catalogue) {
+                    ("problem", true) => "unreadable",
+                    ("problem", false) => "error",
+                    _ => "note",
+                }
+                .to_owned(),
+                says: diagnostic.message.clone(),
+            }
+        })
+        .collect()
+}
+
+fn json_diagnostics(rows: &[serde_json::Value], kind: &str) -> Vec<JsonDiagnostic> {
+    rows.iter()
+        .filter(|row| row["kind"] == kind)
+        .map(|row| JsonDiagnostic {
+            kind: row["kind"].as_str().expect("kind").to_owned(),
+            origin: row["origin"].as_str().expect("origin").to_owned(),
+            origin_label: row["origin_label"]
+                .as_str()
+                .expect("origin label")
+                .to_owned(),
+            install: row["install"].as_str().map(ToOwned::to_owned),
+            library: row["library"].as_str().map(ToOwned::to_owned),
+            cause: row["cause"].as_str().map(ToOwned::to_owned),
+            label: row["label"].as_str().expect("label").to_owned(),
+            says: row["says"].as_str().expect("diagnostic").to_owned(),
+        })
+        .collect()
+}
+
+fn assert_json_matches_inventory(rows: &[serde_json::Value], inventory: &dxray_core::Inventory) {
     let expected_entries: std::collections::HashSet<_> = inventory
         .entries
         .iter()
@@ -667,7 +709,6 @@ fn listing_json_preserves_the_core_inventory_contract() {
             )
         })
         .collect();
-    let rows = inventory_json_rows(&launchers);
     let actual_entries: std::collections::HashSet<_> = rows
         .iter()
         .filter(|row| row["kind"] == "game")
@@ -702,12 +743,60 @@ fn listing_json_preserves_the_core_inventory_contract() {
         })
         .collect();
 
-    assert_eq!(
-        actual_entries, expected_entries,
-        "CLI JSON must preserve the core inventory contract"
-    );
+    assert_eq!(actual_entries, expected_entries);
     assert_eq!(actual_roots, expected_roots);
     assert_eq!(actual_libraries, expected_libraries);
+    assert_eq!(
+        json_diagnostics(rows, "note"),
+        expected_diagnostics(&inventory.notes, "note")
+    );
+    assert_eq!(
+        json_diagnostics(rows, "problem"),
+        expected_diagnostics(&inventory.problems, "problem")
+    );
+}
+
+#[test]
+fn listing_json_preserves_the_core_inventory_contract() {
+    let steam_library = PathBuf::from("/dxray-cli-contract/steam");
+    let heroic_library = PathBuf::from("/dxray-cli-contract/heroic");
+    let steam = Fake {
+        origin: dxray_core::steam::ORIGIN,
+        roots: vec![steam_library.clone()],
+        games: vec![Game {
+            identity: Identity::SteamApp(570),
+            name: "Dota 2".to_owned(),
+            install_dir: steam_library.join("steamapps/common/dota 2 beta"),
+            origin: dxray_core::steam::ORIGIN,
+        }],
+        index_notes: vec!["steam index caveat".to_owned()],
+        index_problems: vec!["steam index problem".to_owned()],
+        notes: vec![
+            "steam catalogue caveat".to_owned(),
+            "steam catalogue caveat".to_owned(),
+        ],
+        ..Fake::new("steam")
+    };
+    let heroic = Fake {
+        origin: dxray_core::heroic::ORIGIN,
+        roots: vec![heroic_library.clone()],
+        games: vec![Game {
+            identity: Identity::Native("heroic-hades".to_owned()),
+            name: "Hades".to_owned(),
+            install_dir: PathBuf::from("/games/Hades"),
+            origin: dxray_core::Origin::new("heroic", "Heroic / GOG"),
+        }],
+        problems: vec![
+            "heroic catalogue problem".to_owned(),
+            "heroic catalogue problem".to_owned(),
+        ],
+        ..Fake::new("heroic")
+    };
+    let launchers: [&dyn Launcher; 2] = [&steam, &heroic];
+
+    let inventory = dxray_core::Inventory::collect(&launchers);
+    let rows = inventory_json_rows(&launchers);
+    assert_json_matches_inventory(&rows, &inventory);
 }
 
 #[test]

@@ -6,7 +6,7 @@ use ratatui_tea::{Cmd, Model};
 use crate::entry::Entry;
 use crate::key::Key;
 use crate::layout;
-use crate::msg::Msg;
+use crate::msg::{Msg, ScanDiagnostic};
 
 /// The pane whose navigation keys currently have ownership.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,8 +43,8 @@ pub struct App {
 /// whether it is an unreadable input or a caveat from a successfully read one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ScanMessage {
-    Problem(String),
-    Note(String),
+    Problem(ScanDiagnostic),
+    Note(ScanDiagnostic),
 }
 
 impl ScanMessage {
@@ -55,9 +55,15 @@ impl ScanMessage {
         }
     }
 
-    pub(crate) fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> String {
         match self {
-            Self::Problem(text) | Self::Note(text) => text,
+            Self::Problem(diagnostic) | Self::Note(diagnostic) => {
+                if diagnostic.origin.label().is_empty() {
+                    diagnostic.message.clone()
+                } else {
+                    format!("{}: {}", diagnostic.origin, diagnostic.message)
+                }
+            }
         }
     }
 }

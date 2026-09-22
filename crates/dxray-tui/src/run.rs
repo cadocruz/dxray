@@ -3,7 +3,7 @@
 use std::{
     io,
     ops::ControlFlow,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -244,6 +244,7 @@ fn scan_launchers(
         cancellation,
         handle,
         builds: Builds::default(),
+        root: None,
     };
     dxray_core::walk(launchers, &mut stream).is_continue()
 }
@@ -260,6 +261,7 @@ struct Stream<'a> {
     cancellation: &'a Cancellation,
     handle: &'a ProgramHandle<Msg>,
     builds: Builds,
+    root: Option<PathBuf>,
 }
 
 impl Stream<'_> {
@@ -292,15 +294,26 @@ impl Stream<'_> {
 
 impl dxray_core::Visitor for Stream<'_> {
     fn root(&mut self, _origin: dxray_core::Origin, root: &Path) -> ControlFlow<()> {
+        self.root = Some(root.to_path_buf());
         self.send(Msg::Root(root.to_path_buf()))
     }
 
     fn note(&mut self, origin: dxray_core::Origin, note: &str) -> ControlFlow<()> {
-        self.tell(Msg::Note(format!("{origin}: {note}")))
+        self.tell(Msg::Note(crate::msg::ScanDiagnostic {
+            origin,
+            root: self.root.clone(),
+            library: None,
+            message: note.to_owned(),
+        }))
     }
 
     fn problem(&mut self, origin: dxray_core::Origin, problem: &str) -> ControlFlow<()> {
-        self.tell(Msg::Problem(format!("{origin}: {problem}")))
+        self.tell(Msg::Problem(crate::msg::ScanDiagnostic {
+            origin,
+            root: self.root.clone(),
+            library: None,
+            message: problem.to_owned(),
+        }))
     }
 
     fn library(&mut self, _origin: dxray_core::Origin, library: &Path) -> ControlFlow<()> {
@@ -315,10 +328,20 @@ impl dxray_core::Visitor for Stream<'_> {
     ) -> ControlFlow<()> {
         let origin = launcher.origin();
         for note in catalogue.notes {
-            self.tell(Msg::Note(format!("{origin}: {note}")))?;
+            self.tell(Msg::Note(crate::msg::ScanDiagnostic {
+                origin,
+                root: self.root.clone(),
+                library: Some(library.to_path_buf()),
+                message: note,
+            }))?;
         }
         for problem in catalogue.problems {
-            self.tell(Msg::Problem(format!("{origin}: {problem}")))?;
+            self.tell(Msg::Problem(crate::msg::ScanDiagnostic {
+                origin,
+                root: self.root.clone(),
+                library: Some(library.to_path_buf()),
+                message: problem,
+            }))?;
         }
         for game in catalogue.games {
             self.live()?;
@@ -492,6 +515,41 @@ mod tests {
         }
     }
 
+    struct ReportingFixture {
+        origin: dxray_core::Origin,
+        root: PathBuf,
+    }
+
+    impl dxray_core::Launcher for ReportingFixture {
+        fn origin(&self) -> dxray_core::Origin {
+            self.origin
+        }
+
+        fn roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+
+        fn candidate_roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+
+        fn libraries(&self, root: &std::path::Path) -> dxray_core::Libraries {
+            dxray_core::Libraries {
+                paths: vec![root.join("library")],
+                notes: vec!["index caveat".to_owned()],
+                problems: vec!["index problem".to_owned()],
+            }
+        }
+
+        fn games(&self, _library: &std::path::Path) -> dxray_core::Catalogue {
+            dxray_core::Catalogue {
+                notes: vec!["catalogue caveat".to_owned()],
+                problems: vec!["catalogue problem".to_owned()],
+                ..dxray_core::Catalogue::default()
+            }
+        }
+    }
+
     fn drain(launchers: &[&dyn dxray_core::Launcher]) -> Vec<Msg> {
         let (handle, receiver) = ratatui_tea::channel();
         assert!(
@@ -558,7 +616,9 @@ mod tests {
         assert!(
             messages.iter().any(|msg| matches!(
                 msg,
-                Msg::Note(note) if note == "Noted: a record with no install_path, found elsewhere"
+                Msg::Note(note)
+                    if note.origin.label() == "Noted"
+                        && note.message == "a record with no install_path, found elsewhere"
             )),
             "the catalogue note must be shown, with the launcher that made it: {messages:?}"
         );
@@ -566,6 +626,67 @@ mod tests {
             !messages.iter().any(|msg| matches!(msg, Msg::Problem(_))),
             "and as a note, not a problem: {messages:?}"
         );
+    }
+
+    #[test]
+    fn tui_emits_the_core_diagnostics_with_their_origins() {
+        let fixture = ReportingFixture {
+            origin: dxray_core::Origin::new("fixture", "Fixture"),
+            root: PathBuf::from("/dxray-tui-diagnostics"),
+        };
+        let inventory = dxray_core::Inventory::collect(&[&fixture]);
+        let expected_notes: Vec<_> = inventory
+            .notes
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.origin,
+                    diagnostic.root.clone(),
+                    diagnostic.library.clone(),
+                    diagnostic.message.clone(),
+                )
+            })
+            .collect();
+        let expected_problems: Vec<_> = inventory
+            .problems
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.origin,
+                    diagnostic.root.clone(),
+                    diagnostic.library.clone(),
+                    diagnostic.message.clone(),
+                )
+            })
+            .collect();
+        let messages = drain(&[&fixture]);
+        let notes: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Msg::Note(note) => Some((
+                    note.origin,
+                    note.root.clone(),
+                    note.library.clone(),
+                    note.message.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+        let problems: Vec<_> = messages
+            .into_iter()
+            .filter_map(|message| match message {
+                Msg::Problem(problem) => Some((
+                    problem.origin,
+                    problem.root,
+                    problem.library,
+                    problem.message,
+                )),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(notes, expected_notes);
+        assert_eq!(problems, expected_problems);
     }
 
     #[test]
@@ -621,7 +742,9 @@ mod tests {
         assert!(
             messages.iter().any(|msg| matches!(
                 msg,
-                Msg::Note(note) if note == "Second: its index declared no library"
+                Msg::Note(note)
+                    if note.origin.label() == "Second"
+                        && note.message == "its index declared no library"
             )),
             "a note is prefixed with the launcher that raised it: {messages:?}"
         );

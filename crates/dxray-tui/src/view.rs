@@ -941,7 +941,7 @@ mod tests {
             entry.notes.push("entry caveat".into());
             app.update(Msg::Resize(width, 30));
             app.update(Msg::Game(Box::new(entry)));
-            app.update(Msg::Problem("global diagnostic".into()));
+            app.update(Msg::test_problem("global diagnostic"));
             app.update(Msg::Key(Key::Enter));
             assert!(!app.evidence_expanded);
             app.update(Msg::Key(Key::Tab));
@@ -1349,10 +1349,10 @@ mod tests {
     fn normal_view_renders_the_game_and_scan_messages() {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(game())));
-        app.update(Msg::Problem(
+        app.update(Msg::test_problem(
             "could not read /steam/libraryfolders.vdf".to_owned(),
         ));
-        app.update(Msg::Note("library is declared twice".to_owned()));
+        app.update(Msg::test_note("library is declared twice".to_owned()));
 
         app.update(Msg::Resize(180, 50));
         let screen = draw(&app, 180, 50);
@@ -1368,7 +1368,7 @@ mod tests {
         let mut entry = game();
         entry.notes = (0..80).map(|i| format!("evidence line {i}")).collect();
         app.update(Msg::Game(Box::new(entry)));
-        app.update(Msg::Problem("unreadable library".into()));
+        app.update(Msg::test_problem("unreadable library"));
         let selected = app.selected;
         for width in [32, 60, 99, 100, 120, 180, 40] {
             app.update(Msg::Resize(width, 24));
@@ -1467,8 +1467,8 @@ mod tests {
             let mut app = App::new(24);
             app.update(Msg::Resize(width, 24));
             app.update(Msg::Game(Box::new(game())));
-            app.update(Msg::Problem("unreadable library".into()));
-            app.update(Msg::Note("duplicate library".into()));
+            app.update(Msg::test_problem("unreadable library"));
+            app.update(Msg::test_note("duplicate library"));
             app.filter = format!("{}END", "銀河".repeat(80));
 
             let screen = draw(&app, width, 24);
@@ -1567,9 +1567,9 @@ mod tests {
     fn diagnostic_counts_are_global_and_do_not_invent_severities() {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(game())));
-        app.update(Msg::Problem("unreadable library".into()));
-        app.update(Msg::Note("duplicate library".into()));
-        app.update(Msg::Note("missing metadata".into()));
+        app.update(Msg::test_problem("unreadable library"));
+        app.update(Msg::test_note("duplicate library"));
+        app.update(Msg::test_note("missing metadata"));
         app.update(Msg::Key(crate::key::Key::Char('z')));
         let screen = draw(&app, 120, 24);
         let header = screen.lines().next().unwrap();
@@ -1585,7 +1585,7 @@ mod tests {
     #[test]
     fn focus_and_problem_color_have_textual_equivalents() {
         let mut app = App::new(24);
-        app.update(Msg::Problem("unreadable library".into()));
+        app.update(Msg::test_problem("unreadable library"));
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         for focus in [crate::app::Focus::List, crate::app::Focus::Detail] {
             app.focus = focus;
@@ -1690,7 +1690,7 @@ mod tests {
     fn essential_text_structure_state_and_selection_keep_contrast() {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(game())));
-        app.update(Msg::Problem("unreadable library".into()));
+        app.update(Msg::test_problem("unreadable library"));
         app.update(Msg::Resize(120, 24));
         let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
         terminal.draw(|frame| render(&app, frame)).unwrap();
@@ -1733,8 +1733,8 @@ mod tests {
         let mut entry = game();
         entry.notes.push("selection remains uncertain".into());
         app.update(Msg::Game(Box::new(entry)));
-        app.update(Msg::Problem("unreadable library".into()));
-        app.update(Msg::Note("duplicate library".into()));
+        app.update(Msg::test_problem("unreadable library"));
+        app.update(Msg::test_note("duplicate library"));
         for width in [60, 180] {
             app.update(Msg::Resize(width, 60));
             app.focus = crate::app::Focus::Detail;
@@ -1769,8 +1769,8 @@ mod tests {
         let mut entry = game();
         entry.notes = (0..60).map(|i| format!("entry caveat {i}")).collect();
         app.update(Msg::Game(Box::new(entry)));
-        app.update(Msg::Problem("scan failure".into()));
-        app.update(Msg::Note("scan note".into()));
+        app.update(Msg::test_problem("scan failure"));
+        app.update(Msg::test_note("scan note"));
         app.focus = crate::app::Focus::Detail;
         let selected = app.selected;
         for width in [180, 60, 32, 100] {
@@ -2137,9 +2137,7 @@ mod tests {
         // At the 30-cell inner width, Ratatui renders this diagnostic in two
         // rows. The former local approximation counted three because of the
         // four spaces, so End selected a blank row after the content.
-        app.update(Msg::Problem(
-            "aa    aaaaaaaaaaaaaaa aaaaaaaaaa FINAL".into(),
-        ));
+        app.update(Msg::test_problem("aa    aaaaaaaaaaaaaaa aaaaaaaaaa FINAL"));
         app.update(Msg::Key(crate::Key::Tab));
         app.update(Msg::Key(crate::Key::Home));
 
@@ -2196,7 +2194,7 @@ mod tests {
             entry.notes = (0..30).map(|index| format!("long note {index}")).collect();
             app.update(Msg::Resize(width, 13));
             app.update(Msg::Game(Box::new(entry)));
-            app.update(Msg::Problem("last scroll row".into()));
+            app.update(Msg::test_problem("last scroll row"));
             app.update(Msg::Key(crate::Key::Tab));
 
             let first = draw(&app, width, 13);

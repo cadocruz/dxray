@@ -11,6 +11,28 @@ use std::path::PathBuf;
 
 use crate::entry::Entry;
 use crate::key::Key;
+use dxray_core::Origin;
+
+/// One diagnostic emitted while walking a launcher inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanDiagnostic {
+    pub origin: Origin,
+    pub root: Option<PathBuf>,
+    pub library: Option<PathBuf>,
+    pub message: String,
+}
+
+impl ScanDiagnostic {
+    #[cfg(test)]
+    pub(crate) fn testing(message: impl Into<String>) -> Self {
+        Self {
+            origin: Origin::new("test", ""),
+            root: None,
+            library: None,
+            message: message.into(),
+        }
+    }
+}
 
 /// A message for the model.
 #[derive(Debug, Clone)]
@@ -36,13 +58,24 @@ pub enum Msg {
     /// hundred bytes through the channel.
     Game(Box<Entry>),
     /// Something could not be read. The scan continues.
-    Problem(String),
+    Problem(ScanDiagnostic),
     /// Something was read and says less than it looks like it does.
-    Note(String),
+    Note(ScanDiagnostic),
     /// The scan is over. Not the same as the channel closing: the scanning
     /// thread finishing is news the screen has to show, and the input thread
     /// keeps the channel open long after.
     Finished,
     /// Time passed. Drives the spinner and nothing else.
     Tick,
+}
+
+#[cfg(test)]
+impl Msg {
+    pub(crate) fn test_problem(message: impl Into<String>) -> Self {
+        Self::Problem(ScanDiagnostic::testing(message))
+    }
+
+    pub(crate) fn test_note(message: impl Into<String>) -> Self {
+        Self::Note(ScanDiagnostic::testing(message))
+    }
 }
