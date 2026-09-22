@@ -121,16 +121,41 @@ Start the terminal browser:
 dxray-tui
 ```
 
-For `inspect` and `game`, use `--view compact` for static renderer evidence,
-features and essential caveats, or `--view full` for absolute paths, versions,
-imports and executable ranking. Without `--view`, these commands use the
-standard text layout. `installed` and `steam` use the compact inventory tree by
-default; use `--view full` for complete static evidence and executable ranking.
-Compact output retains each input's path. `--view` cannot be combined with
-`--json`. Only `inspect` accepts `-r` / `--recursive`; only `nvapi` accepts
-repeatable `--appid ID` options. Invalid options exit 2 before scanning. Direct
-paths do not provide launcher or Proton context, so these reports mark the
-static NVAPI policy as not assessed.
+### Commands
+
+| Command | What it does | Argument |
+|---|---|---|
+| `inspect` | Reads PE files, or scans directories for `.exe` and `.dll` | `PATH...` |
+| `game` | Ranks the executables in an install directory and analyzes the best | `PATH...` |
+| `installed` | Lists what every supported launcher declares | — |
+| `steam` | Lists what Steam declares | — |
+| `nvapi` | Reads a Proton build's static NVAPI policy | `PROTON_PATH` |
+| `help` | Prints help for the program or for one command | `[COMMAND]` |
+
+| Option | `inspect` | `game` | `installed` | `steam` | `nvapi` |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `--json` | ✓ | ✓ | ✓ | ✓ | |
+| `--view compact\|full` | ✓ | ✓ | ✓ | ✓ | |
+| `-r`, `--recursive` | ✓ | | | | |
+| `--appid ID`, repeatable | | | | | ✓ |
+
+`--view` cannot be combined with `--json`. Invalid options exit 2 before
+anything is scanned.
+
+`dxray-tui` takes no subcommand and nothing but `--help` and `--version`.
+
+### What the views show
+
+`--view compact` gives static renderer evidence, features and the essential
+caveats; `--view full` gives absolute paths, versions, imports and the
+executable ranking. Compact output retains each input's path.
+
+The default differs by command. Without `--view`, `inspect` and `game` use the
+standard text layout, while `installed` and `steam` use the compact inventory
+tree.
+
+Direct paths do not provide launcher or Proton context, so those reports mark
+the static NVAPI policy as not assessed.
 
 Inventory reports are grouped as launcher, library and game. Each game header
 keeps its launcher ID and a static renderer result; the rows below it carry the
@@ -165,6 +190,34 @@ one `PROTON_PATH`, either an installation directory or its `proton` script.
 Options belong after the subcommand and may appear before or after paths.
 Use `--` before a path beginning with a hyphen. Run `dxray COMMAND --help`
 for command-specific options.
+
+## Environment
+
+Discovery looks in the conventional locations. These variables say where else
+to look, and are the answer for an installation this tool would not find on its
+own. Each takes a platform-native path list, separated by `:` on Linux.
+
+| Variable | Effect |
+|---|---|
+| `DXRAY_STEAM_ROOT` | Steam roots to add, considered after the conventional ones |
+| `DXRAY_HEROIC_CONFIG` | Heroic configuration directories to add |
+| `DXRAY_CONTAINER_HOMES` | Distrobox homes to inspect, in place of the scan below |
+
+Without `DXRAY_CONTAINER_HOMES`, `dxray` looks for a Distrobox home on mounted
+volumes: for each mount under `/media`, `/run/media` or `/mnt` it tries
+`data/distrobox` and `distrobox`, lists their direct children, and considers
+each child along with its `home` and `root` subdirectories. That is the whole
+of it — two fixed subdirectories per mount and one level of children, never a
+filesystem search.
+
+Setting `DXRAY_CONTAINER_HOMES` to an **empty value** disables that scan
+instead of adding to it, which is the difference between a run that depends on
+what happens to be mounted and one that does not.
+
+Steam consults container homes only when no Steam was found on the host, so a
+native installation stays authoritative. Heroic always includes them, because
+each Heroic configuration is an independent source of records rather than
+another spelling of one installation.
 
 ## Exit codes
 
