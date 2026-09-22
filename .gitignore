@@ -9,3 +9,6 @@ codereview*.md
 # Local worklists and machine-specific test results stay out of Git.
 TODO.md
 real-test-results.md
+
+# Editor state belongs to a machine, not to the project.
+.idea/
