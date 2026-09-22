@@ -25,7 +25,47 @@ Flatpak, Snap and Steam Deck are not supported in this release.
 
 ## Install
 
-The crates are not published yet. Install from source with Rust 1.88 or newer
+Either route below leaves two binaries:
+
+```text
+dxray      Command-line analyzer
+dxray-tui  Interactive library browser
+```
+
+### From a release
+
+Every release attaches two Linux x86-64 archives and a `SHA256SUMS` file. Take
+the `musl` build unless you have a reason not to: it is statically linked, so
+nothing about it depends on the host's glibc. The `gnu` build is dynamically
+linked against the system C library.
+
+```sh
+version=0.1.0
+target=x86_64-unknown-linux-musl
+base=https://github.com/cadocruz/dxray/releases/download/v$version
+
+curl -LO "$base/dxray-$version-$target.tar.gz"
+curl -LO "$base/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+
+tar -xzf "dxray-$version-$target.tar.gz"
+install -Dm755 "dxray-$version-$target/dxray" \
+               "dxray-$version-$target/dxray-tui" -t ~/.local/bin
+```
+
+Read the `sha256sum` line before running anything: it prints `OK` per archive
+and exits non-zero if a download is not what the release says it is. The last
+command assumes `~/.local/bin` is on your `PATH`.
+
+The archive holds the two binaries, this README and the licence. There is no
+installer and nothing to uninstall — the binaries are the whole program, and
+deleting them removes it.
+
+Only Linux x86-64 is built. Anything else, Windows included, builds from source.
+
+### From source
+
+The crates are not published to crates.io yet. Build with Rust 1.88 or newer
 and Cargo.
 
 ```sh
@@ -33,13 +73,6 @@ git clone https://github.com/cadocruz/dxray.git
 cd dxray
 cargo install --path crates/dxray-cli --locked
 cargo install --path crates/dxray-tui --locked
-```
-
-The commands install two binaries:
-
-```text
-dxray      Command-line analyzer
-dxray-tui  Interactive library browser
 ```
 
 To build without installing them:
