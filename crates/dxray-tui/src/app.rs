@@ -351,8 +351,12 @@ impl Model for App {
                 self.keep_selection_visible();
                 self.clamp_detail_offset();
             }
-            Msg::Root(_) => self.roots = self.roots.saturating_add(1),
-            Msg::Library(_) => self.libraries = self.libraries.saturating_add(1),
+            Msg::Root(crate::msg::ScanLocation { .. }) => {
+                self.roots = self.roots.saturating_add(1);
+            }
+            Msg::Library(crate::msg::ScanLocation { .. }) => {
+                self.libraries = self.libraries.saturating_add(1);
+            }
             Msg::Game(entry) => {
                 self.entries.push(*entry);
                 if self.selected.is_none() && self.selected_position().is_none() {
@@ -393,6 +397,7 @@ mod tests {
     use crate::{
         Key, Msg,
         entry::{Best, Entry},
+        msg::ScanLocation,
     };
     use dxray_core::game::{Candidate, Reason, Survey};
     use dxray_core::proton::Answer;
@@ -650,8 +655,14 @@ mod tests {
     fn a_heroic_configuration_counts_as_a_discovered_library() {
         let mut app = App::new(24);
         let root = PathBuf::from("/config/heroic");
-        app.update(Msg::Root(root.clone()));
-        app.update(Msg::Library(root));
+        app.update(Msg::Root(ScanLocation {
+            origin: dxray_core::heroic::ORIGIN,
+            path: root.clone(),
+        }));
+        app.update(Msg::Library(ScanLocation {
+            origin: dxray_core::heroic::ORIGIN,
+            path: root,
+        }));
         assert_eq!(app.roots, 1);
         assert_eq!(app.libraries, 1);
     }

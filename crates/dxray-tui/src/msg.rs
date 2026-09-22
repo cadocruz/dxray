@@ -13,6 +13,13 @@ use crate::entry::Entry;
 use crate::key::Key;
 use dxray_core::Origin;
 
+/// A root or library discovered while walking a launcher inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanLocation {
+    pub origin: Origin,
+    pub path: PathBuf,
+}
+
 /// One diagnostic emitted while walking a launcher inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanDiagnostic {
@@ -43,14 +50,14 @@ pub enum Msg {
     /// anything.
     Resize(u16, u16),
     /// A launcher installation was found and is about to be read.
-    Root(PathBuf),
+    Root(ScanLocation),
     /// A library inside one of those installations is about to be read.
     ///
     /// Sent for every library the launcher structurally recognises, whether or
     /// not it turns out to hold a game: an empty Steam library and an installed
     /// Heroic with nothing installed are the same situation and are counted the
     /// same way.
-    Library(PathBuf),
+    Library(ScanLocation),
     /// One game, fully examined.
     ///
     /// Boxed because it is by far the largest thing here and an enum is as big

@@ -1538,7 +1538,10 @@ mod tests {
     fn scan_status_and_totals_leave_the_filter_visible() {
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(game())));
-        app.update(Msg::Library(PathBuf::from("/steam")));
+        app.update(Msg::Library(crate::msg::ScanLocation {
+            origin: dxray_core::steam::ORIGIN,
+            path: PathBuf::from("/steam"),
+        }));
         let scanning = draw(&app, 120, 24);
         assert!(scanning.contains("scanning"));
         assert!(scanning.contains("Entries: 1  Libraries: 1  Roots: 0"));

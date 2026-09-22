@@ -293,9 +293,12 @@ impl Stream<'_> {
 }
 
 impl dxray_core::Visitor for Stream<'_> {
-    fn root(&mut self, _origin: dxray_core::Origin, root: &Path) -> ControlFlow<()> {
+    fn root(&mut self, origin: dxray_core::Origin, root: &Path) -> ControlFlow<()> {
         self.root = Some(root.to_path_buf());
-        self.send(Msg::Root(root.to_path_buf()))
+        self.send(Msg::Root(crate::msg::ScanLocation {
+            origin,
+            path: root.to_path_buf(),
+        }))
     }
 
     fn note(&mut self, origin: dxray_core::Origin, note: &str) -> ControlFlow<()> {
@@ -316,8 +319,11 @@ impl dxray_core::Visitor for Stream<'_> {
         }))
     }
 
-    fn library(&mut self, _origin: dxray_core::Origin, library: &Path) -> ControlFlow<()> {
-        self.send(Msg::Library(library.to_path_buf()))
+    fn library(&mut self, origin: dxray_core::Origin, library: &Path) -> ControlFlow<()> {
+        self.send(Msg::Library(crate::msg::ScanLocation {
+            origin,
+            path: library.to_path_buf(),
+        }))
     }
 
     fn catalogue(
@@ -579,15 +585,19 @@ mod tests {
         let messages = drain(&[&empty]);
 
         assert!(
-            messages
-                .iter()
-                .any(|msg| matches!(msg, Msg::Root(path) if path == &empty.roots[0])),
+            messages.iter().any(|msg| matches!(
+                msg,
+                Msg::Root(location)
+                    if location.origin == empty.origin && location.path == empty.roots[0]
+            )),
             "the install must be announced: {messages:?}"
         );
         assert!(
-            messages
-                .iter()
-                .any(|msg| matches!(msg, Msg::Library(path) if path == &empty.roots[0])),
+            messages.iter().any(|msg| matches!(
+                msg,
+                Msg::Library(location)
+                    if location.origin == empty.origin && location.path == empty.roots[0]
+            )),
             "its library must be counted even with no game in it: {messages:?}"
         );
         assert!(
@@ -721,7 +731,7 @@ mod tests {
         let roots: Vec<_> = messages
             .iter()
             .filter_map(|msg| match msg {
-                Msg::Root(path) => Some(path.clone()),
+                Msg::Root(location) => Some(location.path.clone()),
                 _ => None,
             })
             .collect();
@@ -799,14 +809,14 @@ mod tests {
         let roots: Vec<_> = messages
             .iter()
             .filter_map(|message| match message {
-                Msg::Root(path) => Some(path.clone()),
+                Msg::Root(location) => Some((location.origin, location.path.clone())),
                 _ => None,
             })
             .collect();
         let libraries: Vec<_> = messages
             .iter()
             .filter_map(|message| match message {
-                Msg::Library(path) => Some(path.clone()),
+                Msg::Library(location) => Some((location.origin, location.path.clone())),
                 _ => None,
             })
             .collect();
@@ -852,7 +862,7 @@ mod tests {
             inventory
                 .roots
                 .iter()
-                .map(|root| root.path.clone())
+                .map(|root| (root.origin, root.path.clone()))
                 .collect::<Vec<_>>(),
         );
         assert_eq!(
@@ -860,7 +870,7 @@ mod tests {
             inventory
                 .libraries
                 .iter()
-                .map(|library| library.path.clone())
+                .map(|library| (library.origin, library.path.clone()))
                 .collect::<Vec<_>>(),
         );
         assert_eq!(notes, diagnostics(&inventory.notes));
