@@ -1,11 +1,15 @@
 [package]
 name = "dxray-pe"
-version = "0.0.1"
-description = "Reads imports, machine and version resources out of a PE image. No dependencies."
+version.workspace = true
+description = "Dependency-free parser for PE imports, machine type, and version resources."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["pe", "portable-executable", "windows", "parser"]
+categories = ["parser-implementations"]
 
 [dependencies]
 

@@ -18,14 +18,15 @@ perform.
 
 ## Support
 
-Version 0.0.1 supports desktop Linux. Steam and Heroic discovery read local
+Version 0.1.0 supports desktop Linux. Steam and Heroic discovery read local
 installation metadata.
 
 Flatpak, Snap and Steam Deck are not supported in this release.
 
 ## Install
 
-`dxray` requires Rust 1.88 or newer and Cargo.
+The crates are not published yet. Install from source with Rust 1.88 or newer
+and Cargo.
 
 ```sh
 git clone https://github.com/cadocruz/dxray.git

@@ -1,11 +1,15 @@
 [package]
 name = "dxray-tui"
-version = "0.0.1"
-description = "Terminal browser for a whole Steam library: games, their executables, renderer verdicts and Proton's NVAPI policy."
+version.workspace = true
+description = "Interactive terminal browser for local Steam and Heroic game inventories."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["terminal", "games", "steam", "heroic", "linux"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "dxray-tui"
@@ -18,7 +22,7 @@ path = "src/main.rs"
 # passes. See the test in `crates/dxray-cli/tests/dependencies.rs`, which fails
 # if `ratatui` ever becomes reachable from `dxray`.
 [dependencies]
-dxray-core = { path = "../dxray-core" }
+dxray-core = { path = "../dxray-core", version = "0.1.0" }
 # `default-features = false` drops the calendar widget, `ratatui-macros` and
 # `palette` — with them, `time` and its dependencies. Nothing here uses any of
 # it. It does *not* drop the layout cache: `lru` and `kasuari` are unconditional
@@ -35,4 +39,4 @@ ratatui-bubbletea-components = "0.2.0"
 workspace = true
 
 [dev-dependencies]
-dxray-core = { path = "../dxray-core", features = ["test-support"] }
+dxray-core = { path = "../dxray-core", version = "0.1.0", features = ["test-support"] }
