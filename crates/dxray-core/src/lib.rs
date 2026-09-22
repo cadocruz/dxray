@@ -50,6 +50,8 @@ pub mod launcher;
 pub mod nvapi;
 pub mod proton;
 pub mod steam;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod vdf;
 
 mod paths;

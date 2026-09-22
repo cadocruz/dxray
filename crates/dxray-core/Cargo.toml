@@ -10,5 +10,10 @@ repository.workspace = true
 [dependencies]
 dxray-pe = { path = "../dxray-pe" }
 
+[features]
+# Test-only filesystem fixtures shared by crate consumers. This feature has no
+# dependencies and is never enabled by the released binaries.
+test-support = []
+
 [lints]
 workspace = true

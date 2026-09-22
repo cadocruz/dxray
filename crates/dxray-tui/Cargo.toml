@@ -33,3 +33,6 @@ ratatui-bubbletea-components = "0.2.0"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+dxray-core = { path = "../dxray-core", features = ["test-support"] }

@@ -380,6 +380,8 @@ mod tests {
     use crate::msg::Msg;
     use dxray_core::launcher::identity;
 
+    type Diagnostic = (dxray_core::Origin, Option<PathBuf>, Option<PathBuf>, String);
+
     #[test]
     fn cancellation_is_shared_between_worker_clones() {
         let cancellation = Cancellation::default();
@@ -779,76 +781,13 @@ mod tests {
     }
 
     #[test]
-    fn tui_keeps_the_launcher_identity_set_for_steam_and_heroic() {
-        // Both surfaces consume the core launcher walk. Keep the identities
-        // from Steam and Heroic, including Steam's Proton runtime, so either
-        // consumer cannot quietly filter one launcher differently.
-        let steam = Fake {
-            origin: dxray_core::Origin::new("steam", "Steam"),
-            roots: vec![PathBuf::from("/dxray-tui-steam-inventory")],
-            games: vec![
-                dxray_core::Game {
-                    identity: dxray_core::Identity::SteamApp(570),
-                    name: "Dota 2".to_owned(),
-                    install_dir: PathBuf::from("/dxray-tui-steam-inventory/dota 2 beta"),
-                    origin: dxray_core::Origin::new("steam", "Steam"),
-                },
-                dxray_core::Game {
-                    identity: dxray_core::Identity::SteamApp(1_493_710),
-                    name: "Proton Experimental".to_owned(),
-                    install_dir: PathBuf::from("/dxray-tui-steam-inventory/Proton - Experimental"),
-                    origin: dxray_core::Origin::new("steam", "Steam"),
-                },
-            ],
-            notes: Vec::new(),
-            catalogue_notes: Vec::new(),
-        };
-        let heroic = Fake {
-            origin: dxray_core::Origin::new("heroic", "Heroic"),
-            roots: vec![PathBuf::from("/dxray-tui-heroic-inventory")],
-            games: vec![
-                dxray_core::Game {
-                    identity: dxray_core::Identity::Native("epic-game".to_owned()),
-                    name: "Epic Game".to_owned(),
-                    install_dir: PathBuf::from("/games/epic-game"),
-                    origin: dxray_core::Origin::new("heroic", "Heroic / Epic"),
-                },
-                dxray_core::Game {
-                    identity: dxray_core::Identity::Native("gog-game".to_owned()),
-                    name: "GOG Game".to_owned(),
-                    install_dir: PathBuf::from("/games/gog-game"),
-                    origin: dxray_core::Origin::new("heroic", "Heroic / GOG"),
-                },
-            ],
-            notes: Vec::new(),
-            catalogue_notes: Vec::new(),
-        };
-
-        let launchers: [&dyn dxray_core::Launcher; 2] = [&steam, &heroic];
-        let inventory = dxray_core::Inventory::collect(&launchers);
-        let expected_entries: HashSet<_> = inventory
-            .entries
-            .iter()
-            .map(|entry| {
-                (
-                    entry.game.identity.clone(),
-                    entry.game.origin,
-                    entry.library.clone(),
-                )
-            })
-            .collect();
-        let expected_roots: HashSet<_> = inventory
-            .roots
-            .iter()
-            .map(|root| root.path.clone())
-            .collect();
-        let expected_libraries: HashSet<_> = inventory
-            .libraries
-            .iter()
-            .map(|library| library.path.clone())
-            .collect();
+    fn tui_stream_matches_the_shared_steam_and_heroic_fixture() {
+        let fixture = dxray_core::test_support::SteamHeroicFixture::new();
+        let launchers = fixture.launchers();
+        let inventory = fixture.inventory();
         let messages = drain(&launchers);
-        let found_entries: HashSet<_> = messages
+
+        let entries: Vec<_> = messages
             .iter()
             .filter_map(|message| match message {
                 Msg::Game(entry) => {
@@ -857,26 +796,88 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let found_roots: HashSet<_> = messages
+        let roots: Vec<_> = messages
             .iter()
             .filter_map(|message| match message {
                 Msg::Root(path) => Some(path.clone()),
                 _ => None,
             })
             .collect();
-        let found_libraries: HashSet<_> = messages
-            .into_iter()
+        let libraries: Vec<_> = messages
+            .iter()
             .filter_map(|message| match message {
-                Msg::Library(path) => Some(path),
+                Msg::Library(path) => Some(path.clone()),
+                _ => None,
+            })
+            .collect();
+        let notes: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Msg::Note(note) => Some((
+                    note.origin,
+                    note.root.clone(),
+                    note.library.clone(),
+                    note.message.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+        let problems: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Msg::Problem(problem) => Some((
+                    problem.origin,
+                    problem.root.clone(),
+                    problem.library.clone(),
+                    problem.message.clone(),
+                )),
                 _ => None,
             })
             .collect();
 
         assert_eq!(
-            found_entries, expected_entries,
-            "TUI entries must preserve the core inventory contract"
+            entries,
+            inventory
+                .entries
+                .iter()
+                .map(|entry| (
+                    entry.game.identity.clone(),
+                    entry.game.origin,
+                    entry.library.clone(),
+                ))
+                .collect::<Vec<_>>(),
         );
-        assert_eq!(found_roots, expected_roots);
-        assert_eq!(found_libraries, expected_libraries);
+        assert_eq!(
+            roots,
+            inventory
+                .roots
+                .iter()
+                .map(|root| root.path.clone())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            libraries,
+            inventory
+                .libraries
+                .iter()
+                .map(|library| library.path.clone())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(notes, diagnostics(&inventory.notes));
+        assert_eq!(problems, diagnostics(&inventory.problems));
+    }
+
+    fn diagnostics(diagnostics: &[dxray_core::InventoryDiagnostic]) -> Vec<Diagnostic> {
+        diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.origin,
+                    diagnostic.root.clone(),
+                    diagnostic.library.clone(),
+                    diagnostic.message.clone(),
+                )
+            })
+            .collect()
     }
 }

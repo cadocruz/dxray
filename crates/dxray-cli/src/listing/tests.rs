@@ -800,6 +800,32 @@ fn listing_json_preserves_the_core_inventory_contract() {
 }
 
 #[test]
+fn listing_json_matches_the_shared_steam_and_heroic_fixture() {
+    let fixture = dxray_core::test_support::SteamHeroicFixture::new();
+    let launchers = fixture.launchers();
+    let inventory = fixture.inventory();
+
+    assert!(
+        inventory
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.game.identity, Identity::SteamApp(570)))
+    );
+    assert!(inventory.entries.iter().any(|entry| {
+        entry.game.identity == Identity::Native("Hades".to_owned())
+            && entry.game.origin == dxray_core::heroic::Store::Gog.origin()
+    }));
+    assert!(inventory.notes.iter().any(|diagnostic| {
+        diagnostic.origin == dxray_core::heroic::ORIGIN && diagnostic.library.is_some()
+    }));
+    assert!(inventory.problems.iter().any(|diagnostic| {
+        diagnostic.origin == dxray_core::steam::ORIGIN && diagnostic.library.is_some()
+    }));
+
+    assert_json_matches_inventory(&inventory_json_rows(&launchers), &inventory);
+}
+
+#[test]
 fn a_library_nobody_could_look_inside_is_not_reported_as_an_empty_one() {
     // The two states are not the same state, and only one of them is a
     // statement about what the user owns. "(no games installed)" under a
