@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Release binaries are downloaded and run, not debugged.
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  verify:
+    name: Verify ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      # CI filters on branches, which a tag push does not match, so the gate
+      # runs again here. Without it a tag can ship a commit no check ever saw.
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test --workspace --no-fail-fast
+      - name: Check the tag against the workspace version
+        id: version
+        run: |
+          version="$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name == "dxray-cli") | .version')"
+          tagged="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tagged" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} names ${tagged}, the workspace says ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.target }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      # No musl-tools: the target's own std ships the crt objects, and every
+      # crate here is pure Rust. A C dependency would need the package back.
+      - name: Build both binaries
+        run: >
+          cargo build --release --locked
+          --target ${{ matrix.target }}
+          -p dxray-cli -p dxray-tui
+      # The musl build runs here too, being static. A binary that cannot report
+      # its own version is not worth attaching to a release.
+      - name: Smoke-test what was built
+        run: |
+          ./target/${{ matrix.target }}/release/dxray --version
+          ./target/${{ matrix.target }}/release/dxray-tui --version
+      - name: Package
+        run: |
+          name="dxray-${{ needs.verify.outputs.version }}-${{ matrix.target }}"
+          mkdir "$name"
+          cp "target/${{ matrix.target }}/release/dxray" \
+             "target/${{ matrix.target }}/release/dxray-tui" \
+             README.md LICENSE "$name/"
+          tar -czf "$name.tar.gz" "$name"
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dxray-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every build
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksum
+        working-directory: artifacts
+        run: sha256sum dxray-*.tar.gz > SHA256SUMS
+      # A draft, because a tag is what triggers this and a published release is
+      # not something a maintainer can take back. Drop `--draft` to ship on tag.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--draft --generate-notes --title "$GITHUB_REF_NAME")
+          case "$GITHUB_REF_NAME" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            "${args[@]}" \
+            artifacts/*
