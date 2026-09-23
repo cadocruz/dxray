@@ -2,6 +2,8 @@
 //! list of the Legendary it bundles. Only explicit install records are read; a
 //! directory called `Games` is never taken for a game.
 
+pub mod launch;
+
 use std::{
     collections::HashSet,
     fmt, fs, io,
@@ -40,6 +42,24 @@ impl Store {
             Self::Epic => Origin::new("heroic", "Heroic / Epic"),
             Self::Gog => Origin::new("heroic", "Heroic / GOG"),
             Self::Amazon => Origin::new("heroic", "Heroic / Amazon"),
+        }
+    }
+
+    /// The backend a game's origin names, if it is one of these.
+    #[must_use]
+    pub fn from_origin(origin: Origin) -> Option<Self> {
+        [Self::Epic, Self::Gog, Self::Amazon]
+            .into_iter()
+            .find(|store| store.origin() == origin)
+    }
+
+    /// Heroic's name for the runner behind this backend.
+    #[must_use]
+    pub const fn runner(self) -> &'static str {
+        match self {
+            Self::Epic => "legendary",
+            Self::Gog => "gog",
+            Self::Amazon => "nile",
         }
     }
 }

@@ -424,18 +424,14 @@ fn a_game_with_no_proton_prefix_still_gets_a_row_saying_so() {
 }
 
 #[test]
-fn a_non_steam_game_omits_the_inapplicable_nvapi_row() {
-    // Heroic has no compatibility prefix; only full output mentions it.
+fn a_heroic_game_whose_settings_cannot_be_read_has_an_undetermined_nvapi_row() {
+    // Its NVAPI comes from Heroic's settings, which this install does not have.
     let mut out = String::new();
     render_named(&mut out, &[hades()], true);
 
     let unwrapped = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(!unwrapped.contains("NVAPI:"), "got {out:?}");
-    assert!(
-        unwrapped.contains("Heroic / GOG"),
-        "the refusal names the launcher it is refusing for, so the next \
-         launcher added does not inherit a sentence that is false about it: {out:?}"
-    );
+    assert!(unwrapped.contains("NVAPI: not determined"), "got {out:?}");
+    assert!(unwrapped.contains("Heroic / GOG"), "got {out:?}");
 }
 
 #[test]

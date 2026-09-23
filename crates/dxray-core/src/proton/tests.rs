@@ -366,3 +366,133 @@ fn without_a_steam_root_there_are_no_launch_options_to_apply() {
 
     assert_eq!(answer.available, Some(false), "{}", answer.verdict);
 }
+
+/// A Heroic configuration running one Epic game under a 10.0-shaped build.
+struct Heroic(TempDir);
+
+const EPIC: &str = "e0fa47ae79514345823bff209ae29451";
+
+impl Heroic {
+    fn new(tag: &str, settings: &str, umu: Option<&str>, recorded: &str) -> Self {
+        let dir = TempDir::new(tag);
+        let build = dir.dir("tools/proton/GE-Proton");
+        dir.write("tools/proton/GE-Proton/proton", crate::testutil::PROTON_10);
+        dir.dir("tools/proton/GE-Proton/files/lib");
+        let prefix = dir.dir("Prefixes/Game");
+        let root = build.display();
+        let config_info = [
+            "GE-Proton10-1".to_owned(),
+            format!("{root}/files/share/fonts/"),
+            format!("{root}/files/lib/"),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            format!("{root}/files/share/default_pfx/"),
+            String::new(),
+            "False".to_owned(),
+            "True".to_owned(),
+            String::new(),
+            recorded.to_owned(),
+        ]
+        .join("\n");
+        dir.write("Prefixes/Game/config_info", &config_info);
+        dir.write(
+            &format!("GamesConfig/{EPIC}.json"),
+            &format!(
+                r#"{{"{EPIC}":{{"wineVersion":{{"bin":"{root}/proton","name":"GE-Proton","type":"proton"}},"winePrefix":"{}",{settings}}}}}"#,
+                prefix.display()
+            ),
+        );
+        if let Some(umu) = umu {
+            dir.write(
+                "store_cache/umu.json",
+                &format!(r#"{{"legendary_{EPIC}":{umu}}}"#),
+            );
+        }
+        Self(dir)
+    }
+
+    fn answer(&self) -> super::Answer {
+        super::Builds::default().answer_heroic(self.0.path(), crate::heroic::Store::Epic, EPIC)
+    }
+}
+
+#[test]
+fn heroic_turning_nvapi_support_off_withholds_it_through_proton_own_switch() {
+    let answer = Heroic::new(
+        "heroic-off",
+        r#""autoInstallDxvkNvapi":false,"disableUMU":true"#,
+        None,
+        "False",
+    )
+    .answer();
+
+    assert_eq!(answer.available, Some(false), "{}", answer.verdict);
+    assert!(
+        answer
+            .verdict
+            .contains("PROTON_DISABLE_NVAPI=1 in Heroic's settings adds disablenvapi"),
+        "{}",
+        answer.verdict
+    );
+}
+
+#[test]
+fn under_umu_proton_reads_its_lists_by_the_game_steam_appid() {
+    // Heroic's switch does nothing on 9.0 and later, so the list decides: this
+    // umu id is Guardians of the Galaxy's Steam appid.
+    let answer = Heroic::new(
+        "heroic-umu",
+        r#""autoInstallDxvkNvapi":true"#,
+        Some(r#""umu-1088850""#),
+        "False",
+    )
+    .answer();
+
+    assert_eq!(answer.available, Some(false), "{}", answer.verdict);
+    assert!(
+        answer.verdict.starts_with("NVAPI is withheld"),
+        "{}",
+        answer.verdict
+    );
+}
+
+#[test]
+fn a_heroic_environment_option_is_applied_like_a_launch_option() {
+    let answer = Heroic::new(
+        "heroic-force",
+        r#""enviromentOptions":[{"key":"PROTON_FORCE_NVAPI","value":"1"}]"#,
+        Some(r#""umu-1088850""#),
+        "True",
+    )
+    .answer();
+
+    assert_eq!(answer.available, Some(true), "{}", answer.verdict);
+    assert!(
+        answer
+            .verdict
+            .contains("PROTON_FORCE_NVAPI=1 in Heroic's settings adds forcenvapi"),
+        "{}",
+        answer.verdict
+    );
+}
+
+#[test]
+fn an_appid_umu_has_not_supplied_leaves_only_the_last_launch_to_report() {
+    let answer = Heroic::new(
+        "heroic-unknown",
+        r#""autoInstallDxvkNvapi":true"#,
+        None,
+        "True",
+    )
+    .answer();
+
+    assert_eq!(answer.available, None, "{}", answer.verdict);
+    assert!(
+        answer.verdict.starts_with("not determined")
+            && answer.verdict.contains("recorded use_nvapi=True"),
+        "{}",
+        answer.verdict
+    );
+}

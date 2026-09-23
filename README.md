@@ -168,10 +168,12 @@ read successfully but with no game evidence are grouped explicitly rather than
 hidden. Paths inside a library are relative to that library; externally managed
 paths remain absolute. Compact keeps the essential caveats visible; full adds
 library and launcher roots, the complete executable ranking and static evidence.
-For a Steam game, the NVAPI row applies its launch options and any
-`user_settings.py` to the policy of the Proton build that last ran it, and
-quotes the `use_nvapi` value that launch recorded. It is read from files, not
-observed at runtime; Heroic games are reported as not applicable.
+The NVAPI row applies a game's environment to the policy of the Proton build
+that last ran it, and quotes the `use_nvapi` value that launch recorded. For
+Steam that is the launch options; for Heroic, the game's settings over the
+defaults, with the NVAPI switch Heroic sets and, under umu, the umu id Proton
+reads its lists by. Any `user_settings.py` beside the build fills in the rest.
+It is read from files, not observed at runtime.
 Notes and problems remain visible in every view, with the existing exit codes.
 
 ```sh

@@ -382,8 +382,7 @@ fn a_machine_with_only_one_launcher_on_it_gets_an_honest_trailer() {
         text.contains("1 game in 1 library across 1 install"),
         "got:\n{text}"
     );
-    // The NVAPI row may say "no Steam AppID"; there is no Steam root or
-    // library.
+    // No Steam root or library for a Steam that is not installed.
     assert!(
         !text.contains("/.steam/"),
         "a launcher that is not installed contributes no root and no library, \

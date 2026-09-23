@@ -16,7 +16,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::nvapi::{Applied, Decision, Environment, Reading, Resolution, UserSettings};
+use crate::heroic::Store;
+use crate::heroic::launch::NoLaunch;
+use crate::launcher::Identity;
+use crate::nvapi::{Applied, Decision, Environment, Reading, Resolution, SetBy, UserSettings};
 use crate::steam::launch::Launches;
 
 /// The file name of the launcher script inside a Proton install.
@@ -308,17 +311,20 @@ pub struct Builds {
 }
 
 impl Builds {
-    /// The NVAPI answer for a game from any launcher; only a Steam application
-    /// has a prefix to read. `root` is where its launch options live.
+    /// The NVAPI answer for a game from any launcher. `root` is the launcher
+    /// installation, where Steam keeps launch options and Heroic its settings.
     pub fn answer_for(
         &mut self,
         root: Option<&Path>,
         library: &Path,
         game: &crate::launcher::Game,
     ) -> Answer {
-        match game.identity.steam_appid() {
-            Some(appid) => self.answer(root, library, appid),
-            None => Answer::not_applicable(game.origin),
+        match &game.identity {
+            Identity::SteamApp(appid) => self.answer(root, library, *appid),
+            Identity::Native(id) => match (root, Store::from_origin(game.origin)) {
+                (Some(root), Some(store)) => self.answer_heroic(root, store, id),
+                _ => Answer::not_applicable(game.origin),
+            },
         }
     }
 
@@ -326,8 +332,51 @@ impl Builds {
     /// with the launch options from `root` applied. Never an error: every
     /// failure is a sentence.
     pub fn answer(&mut self, root: Option<&Path>, library: &Path, appid: u32) -> Answer {
-        let prefix = compatdata(library, appid);
-        let script = match from_prefix(&prefix) {
+        // Without a Steam root there are no launch options to read.
+        let launch = root.map_or(Ok(Vec::new()), |root| {
+            self.launches
+                .entry(root.to_path_buf())
+                .or_insert_with(|| crate::steam::launch::launches(root))
+                .environment(appid)
+        });
+        self.answer_in(
+            &compatdata(library, appid),
+            launch,
+            SetBy::LaunchOptions,
+            Ok(appid.to_string()),
+        )
+    }
+
+    /// The same for a Heroic game, `app_name` from `store`, under the Heroic
+    /// configuration `root`.
+    pub fn answer_heroic(&mut self, root: &Path, store: Store, app_name: &str) -> Answer {
+        match crate::heroic::launch::launch(root, store, app_name) {
+            Ok(launch) => self.answer_in(
+                &launch.prefix,
+                Ok(launch.environment),
+                SetBy::Heroic,
+                launch.appid,
+            ),
+            Err(NoLaunch::NotProton(runner)) => Answer {
+                script: None,
+                verdict: format!("not applicable: Heroic runs this game with {runner}, not Proton"),
+                available: None,
+                condition: Vec::new(),
+            },
+            Err(NoLaunch::Unknown(why)) => Answer::undetermined(&why),
+        }
+    }
+
+    /// The answer for the prefix at `prefix`, launched with `launch`, as the
+    /// Proton that last ran it sees `appid`.
+    fn answer_in(
+        &mut self,
+        prefix: &Path,
+        launch: std::result::Result<Vec<(String, String)>, String>,
+        launch_by: SetBy,
+        appid: std::result::Result<String, String>,
+    ) -> Answer {
+        let script = match from_prefix(prefix) {
             Ok(script) => script,
             Err(error) => return Answer::undetermined(&error.to_string()),
         };
@@ -351,21 +400,26 @@ impl Builds {
                 };
             }
         };
-        // Without a Steam root there are no launch options to read.
-        let launch = root.map_or(Ok(Vec::new()), |root| {
-            self.launches
-                .entry(root.to_path_buf())
-                .or_insert_with(|| crate::steam::launch::launches(root))
-                .environment(appid)
-        });
-        let appid = appid.to_string();
-        let environment = Environment::new(launch, &build.settings);
-        let decision = crate::nvapi::decide(&build.reading, &appid);
-        let resolution = crate::nvapi::resolve(&build.reading, &appid, &environment);
         let recorded = build
             .reading
             .recorded_line
-            .and_then(|line| recorded(&prefix, line));
+            .and_then(|line| recorded(prefix, line));
+        let appid = match appid {
+            Ok(appid) => appid,
+            Err(why) => {
+                let mut answer = Answer {
+                    script: Some(script),
+                    verdict: format!("not determined: {why}"),
+                    available: None,
+                    condition: Vec::new(),
+                };
+                witness(&mut answer, recorded);
+                return answer;
+            }
+        };
+        let environment = Environment::new(launch, &build.settings).launched_by(launch_by);
+        let decision = crate::nvapi::decide(&build.reading, &appid);
+        let resolution = crate::nvapi::resolve(&build.reading, &appid, &environment);
         compose(script, &decision, &resolution, recorded)
     }
 }
@@ -384,7 +438,7 @@ fn compose(
             .map(crate::nvapi::Condition::source)
             .unwrap_or_default()
     };
-    let (mut verdict, mut available, condition) = match resolution {
+    let (verdict, available, condition) = match resolution {
         Resolution::Default => (decision.to_string(), decision.available(), condition()),
         Resolution::Computed { use_nvapi, applied } => {
             let how: Vec<String> = applied.iter().map(Applied::describe).collect();
@@ -404,22 +458,36 @@ fn compose(
             condition(),
         ),
     };
-    if let Some(recorded) = recorded {
-        let spelled = if recorded { "True" } else { "False" };
-        let _ = write!(verdict, "; the last launch recorded use_nvapi={spelled}");
-        if available.is_some_and(|expected| expected != recorded) {
-            verdict.push_str(
-                ", which disagrees: the options changed since, or something this reader \
-                 does not see sets it",
-            );
-            available = None;
-        }
-    }
-    Answer {
+    let mut answer = Answer {
         script: Some(script),
         verdict,
         available,
         condition,
+    };
+    witness(&mut answer, recorded);
+    answer
+}
+
+/// Appends what the last launch recorded, and unsettles an answer it
+/// contradicts.
+fn witness(answer: &mut Answer, recorded: Option<bool>) {
+    let Some(recorded) = recorded else {
+        return;
+    };
+    let spelled = if recorded { "True" } else { "False" };
+    let _ = write!(
+        answer.verdict,
+        "; the last launch recorded use_nvapi={spelled}"
+    );
+    if answer
+        .available
+        .is_some_and(|expected| expected != recorded)
+    {
+        answer.verdict.push_str(
+            ", which disagrees: the options changed since, or something this reader \
+             does not see sets it",
+        );
+        answer.available = None;
     }
 }
 

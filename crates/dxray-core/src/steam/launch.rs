@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use crate::vdf::{self, Object};
 
 /// The keys from the top of `localconfig.vdf` down to the per-app blocks.
-/// Unverified against a real file.
 const APPS: [&str; 5] = ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"];
 
 /// Every account's launch options on one Steam installation.

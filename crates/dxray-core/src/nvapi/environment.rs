@@ -168,9 +168,13 @@ pub fn user_settings(text: &str) -> UserSettings {
 }
 
 /// Where a variable came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SetBy {
+    /// A Steam game's launch options.
+    #[default]
     LaunchOptions,
+    /// A Heroic game's settings, or the switch Heroic sets from them.
+    Heroic,
     UserSettings,
 }
 
@@ -178,6 +182,7 @@ impl SetBy {
     fn as_str(self) -> &'static str {
         match self {
             Self::LaunchOptions => "launch options",
+            Self::Heroic => "Heroic's settings",
             Self::UserSettings => "user_settings.py",
         }
     }
@@ -190,6 +195,7 @@ impl SetBy {
 #[derive(Debug, Clone, Default)]
 pub struct Environment {
     launch: Vec<(String, String)>,
+    launch_by: SetBy,
     settings: Vec<(String, String)>,
     launch_unseen: Option<String>,
     settings_unseen: Option<String>,
@@ -222,15 +228,22 @@ impl Environment {
         };
         Self {
             launch,
+            launch_by: SetBy::LaunchOptions,
             settings,
             launch_unseen,
             settings_unseen,
         }
     }
 
+    /// Names where the launch variables came from, when not launch options.
+    #[must_use]
+    pub fn launched_by(self, launch_by: SetBy) -> Self {
+        Self { launch_by, ..self }
+    }
+
     fn get(&self, variable: &str) -> Lookup<'_> {
         if let Some(value) = last(&self.launch, variable) {
-            return Lookup::Set(value, SetBy::LaunchOptions);
+            return Lookup::Set(value, self.launch_by);
         }
         if let Some(why) = &self.launch_unseen {
             return Lookup::Unseen(why);
