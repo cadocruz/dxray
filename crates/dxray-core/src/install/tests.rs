@@ -388,8 +388,8 @@ fn the_name_of_the_directory_is_used_when_the_caller_supplies_no_name_at_all() {
 #[test]
 fn the_walk_budgets_are_the_numbers_they_are_documented_to_be() {
     // The values themselves, since fixtures are built from the constants. Depth
-    // 8 truncated two of five real games; 512 executables means the directory is
-    // wrong; 16 libraries is one link through a normal import table.
+    // 8 truncated two of five real games; 512 executables only Proton's prefix
+    // reached; 16 libraries is one link through a normal import table.
     assert_eq!(MAX_DEPTH, 32);
     assert_eq!(MAX_EXECUTABLES, 512);
     assert_eq!(MAX_LOCAL_LIBRARIES, 16);

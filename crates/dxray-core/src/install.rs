@@ -25,8 +25,8 @@ pub const MAX_DEPTH: usize = 32;
 /// How many directories the walk will list before giving up.
 pub const MAX_DIRECTORIES: usize = 4096;
 
-/// How many executables will be read and ranked. Far past anything real, so
-/// hitting it says something is wrong with the directory.
+/// How many executables will be read and ranked. Far past any real game; a
+/// Proton build reaches it, since its `default_pfx` holds a Windows install.
 pub const MAX_EXECUTABLES: usize = 512;
 
 /// How many local libraries one executable's imports are followed into, one
