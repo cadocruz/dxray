@@ -1,6 +1,6 @@
-//! Discovery of games installed by Heroic, from its local installation cache.
-//! Only explicit install records are read; a directory called `Games` is never
-//! taken for a game.
+//! Discovery of games installed by Heroic, from its local caches and the install
+//! list of the Legendary it bundles. Only explicit install records are read; a
+//! directory called `Games` is never taken for a game.
 
 use std::{
     collections::HashSet,
@@ -228,9 +228,10 @@ fn existing_roots(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Reads installed records in Heroic's `store_cache` under `root`: install
-/// maps, and library lists where only `is_installed: true` counts. The title,
-/// an absolute install path and the directory itself must all exist.
+/// Reads installed records under `root`: `store_cache` install maps, library
+/// lists where only `is_installed: true` counts, and the install list of the
+/// Legendary that Heroic bundles. The title, an absolute install path and the
+/// directory itself must all exist; a DLC is never a game.
 #[must_use]
 pub fn games(root: &Path) -> Scan {
     let mut scan = Scan::default();
@@ -255,6 +256,13 @@ pub fn games(root: &Path) -> Scan {
         read_install_map(root.join(install_info), store, &mut scan, &mut seen);
         read_library(root.join(library), store, &mut scan, &mut seen);
     }
+    // Heroic points `LEGENDARY_CONFIG_PATH` here; it can hold a path the cache lost.
+    read_install_map(
+        root.join("legendaryConfig/legendary/installed.json"),
+        Store::Epic,
+        &mut scan,
+        &mut seen,
+    );
     scan.games.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -402,6 +410,9 @@ fn add_record(
     scan: &mut Scan,
     seen: &mut HashSet<(Store, Identity, PathBuf)>,
 ) {
+    if record.get("is_dlc").and_then(Json::bool) == Some(true) {
+        return;
+    }
     match record_to_game(record, id, store, path) {
         Ok(game) if seen.insert((store, game.identity.clone(), game.install_dir.clone())) => {
             scan.games.push(game);
@@ -789,6 +800,40 @@ mod tests {
             note.contains("has no install_path") && note.contains("another source"),
             "and the note says both halves, or a stale entry and a lost game \
              read alike: {note:?}"
+        );
+    }
+
+    #[test]
+    fn legendary_own_install_list_supplies_a_game_the_cache_lost() {
+        // Measured: Rocket League's cache record had `install: null`, and only
+        // Legendary's `installed.json` still named the directory.
+        let root = TempDir::new("heroic-legendary");
+        let install = root.dir("games/rocketleague");
+        root.write(
+            "store_cache/legendary_install_info.json",
+            r#"{"Sugar":{"game":{"title":"Rocket League®"},"install":null}}"#,
+        );
+        root.write(
+            "legendaryConfig/legendary/installed.json",
+            &format!(
+                r#"{{"Sugar":{{"app_name":"Sugar","install_path":"{0}","is_dlc":false,"platform":"Windows","title":"Rocket League®","version":"1"}},"SugarPack":{{"app_name":"SugarPack","install_path":"{0}","is_dlc":true,"title":"A DLC","version":"1"}}}}"#,
+                install.display()
+            ),
+        );
+
+        let scan = games(root.path());
+
+        assert!(scan.problems.is_empty(), "{:?}", scan.problems);
+        assert_eq!(scan.games.len(), 1, "a DLC is not a game: {:?}", scan.games);
+        assert_eq!(scan.games[0].name, "Rocket League®");
+        assert_eq!(scan.games[0].origin, Store::Epic.origin());
+        assert_eq!(scan.games[0].install_dir, install);
+        assert!(
+            scan.notes
+                .iter()
+                .any(|note| note.contains("another source")),
+            "the cache record is still reported, got {:?}",
+            scan.notes
         );
     }
 
