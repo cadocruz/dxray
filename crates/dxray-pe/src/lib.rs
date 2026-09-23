@@ -1,9 +1,5 @@
-//! Reads a PE image without loading it.
-//!
-//! Everything here works on a byte slice that came off disk. Nothing is mapped,
-//! nothing is executed, and no header is trusted: every field is bounds-checked
-//! against the slice it came from, because these files are attacker-shaped by
-//! definition — they are game executables from the internet.
+//! Reads a PE image without loading it. Every field is bounds-checked against
+//! the buffer it came from: these files come from the internet.
 
 use std::fmt;
 
@@ -19,9 +15,8 @@ pub const MAX_DESCRIPTORS: usize = 4096;
 /// that would otherwise run to the end of the file.
 const MAX_NAME: usize = 256;
 
-/// How many data directory entries the PE format defines. Used only to bound
-/// what [`Pe::parse`] reserves up front; a header declaring more is still read
-/// to the end of what the file actually holds.
+/// How many data directory entries the PE format defines; bounds only what
+/// [`Pe::parse`] reserves up front.
 const MAX_DIRECTORIES: usize = 16;
 /// Size of one `IMAGE_SECTION_HEADER`, which is what bounds how many of them a
 /// buffer of a given length could possibly contain.
@@ -39,14 +34,11 @@ pub enum Error {
     BadOptionalMagic(u16),
     /// An RVA fell outside every section.
     UnmappedRva(u32),
-    /// A name ran for `MAX_NAME` bytes without a terminator. Reported rather
-    /// than truncated, because a silently empty DLL name reads as "imports
-    /// nothing" and that is a wrong answer wearing a valid one's clothes.
+    /// A name ran for `MAX_NAME` bytes without a terminator. Reported, since an
+    /// empty name would read as "imports nothing".
     UnterminatedName { at: usize },
-    /// A descriptor array ran for [`MAX_DESCRIPTORS`] entries without reaching
-    /// its all-zero terminator. Reported for the same reason as
-    /// [`Self::UnterminatedName`]: a truncated import list reads exactly like a
-    /// complete one.
+    /// A descriptor array ran for [`MAX_DESCRIPTORS`] entries without its
+    /// terminator, which a truncated list would hide.
     UnterminatedDescriptors { at: usize },
     /// A resource directory entry pointed at a subdirectory where a leaf was
     /// expected, or the reverse.
@@ -154,10 +146,8 @@ impl<'a> Pe<'a> {
             return Err(Error::NotPe);
         }
 
-        // Every offset below saturates for the reason given over `read_u16`:
-        // each is built from header fields, and on a 32-bit target `pe_offset`
-        // alone reaches the top of `usize`. A wrapped offset lands elsewhere in
-        // the file and still reads as a perfectly good header.
+        // Offsets saturate, as over `read_u16`: on a 32-bit target `pe_offset`
+        // alone reaches the top of `usize`.
         //
         // COFF header, 20 bytes, immediately after the 4-byte signature.
         let coff = pe_offset.saturating_add(4);
@@ -176,13 +166,8 @@ impl<'a> Pe<'a> {
         };
 
         let dir_count = read_u32(buf, dir_count_at)? as usize;
-        // Reserved against what a file could hold, never against what it
-        // claims. `NumberOfRvaAndSizes` is four unvalidated bytes, and
-        // `with_capacity(0xFFFF_FFFF)` on a 1 KB file asks for 34 GB and
-        // aborts the process — an abort is not an `Err`, so a caller cannot
-        // skip the file and a directory walk dies on the first hostile one.
-        // The loop still reads every entry the header declared and still fails
-        // on the first that runs past the end, so what parses is unchanged.
+        // Reserved against what the file could hold, never what it claims:
+        // `with_capacity(0xFFFF_FFFF)` aborts, and an abort is not an `Err`.
         let mut directories = Vec::with_capacity(dir_count.min(MAX_DIRECTORIES));
         for i in 0..dir_count {
             let at = dir_count_at
@@ -192,10 +177,7 @@ impl<'a> Pe<'a> {
         }
 
         // Section headers follow the optional header, whose length the COFF
-        // header states rather than the magic implying it.
-        // Same rule, smaller number: `NumberOfSections` is a `u16`, so the
-        // worst case is 2 MB rather than an abort, but it is still 2 MB
-        // reserved for section headers a 1 KB file cannot contain.
+        // header states. Reserved by the same rule.
         let mut sections = Vec::with_capacity(section_count.min(buf.len() / SECTION_HEADER));
         for i in 0..section_count {
             let at = optional
@@ -240,9 +222,8 @@ impl<'a> Pe<'a> {
         self.descriptor_names(DIR_IMPORT, 20, 12)
     }
 
-    /// DLL names from the delay-load table: resolved on first call instead of
-    /// at load. Missing these is how a renderer gets misread, because a game
-    /// that delay-loads `d3d12.dll` imports nothing at all at startup.
+    /// DLL names from the delay-load table, resolved on first call. A game that
+    /// delay-loads `d3d12.dll` imports nothing at startup.
     ///
     /// # Errors
     /// Returns [`Error`] when a descriptor or name runs outside the image, or
@@ -297,11 +278,8 @@ impl<'a> Pe<'a> {
                     // zero-fill at run time, nothing to read here.
                     return Err(Error::UnmappedRva(rva));
                 }
-                // Both halves are header fields, so their sum is attacker
-                // controlled too. Unchecked this panics in debug and wraps in
-                // release, and a wrapped offset lands somewhere else in the
-                // file that still reads as a perfectly good DLL name — a
-                // confident answer about bytes the header never pointed at.
+                // Both are header fields: a wrapped sum would read some other
+                // bytes as a valid name.
                 let at = s
                     .raw_pointer
                     .checked_add(delta)
@@ -324,13 +302,8 @@ impl<'a> Pe<'a> {
     }
 }
 
-// The end of each window saturates rather than wrapping. Every `at` reaching
-// these is derived from a header field, and the only reason none of them can
-// reach the top of `usize` today is a chain of bounds elsewhere in this file;
-// resting a panic on that chain staying intact is how the overflow in
-// `offset_of` came to be. A saturated end is past the buffer, so it reports
-// `Truncated` at the offset the caller asked for, which is the same answer any
-// other out-of-range read gives.
+// Window ends saturate rather than wrap: a saturated end is past the buffer,
+// so it reports `Truncated` like any other out-of-range read.
 fn read_u16(buf: &[u8], at: usize) -> Result<u16> {
     let bytes = buf
         .get(at..at.saturating_add(2))

@@ -1,8 +1,5 @@
-//! Whole install layouts, built on disk and ranked end to end.
-//!
-//! The assertions are about **order**. A list that contains the shipping binary
-//! somewhere below the crash handler is not a ranking, and a test that only
-//! checks membership would pass on one.
+//! Whole install layouts, built on disk and ranked end to end. The assertions
+//! are about order.
 
 use super::{MAX_DEPTH, MAX_EXECUTABLES, MAX_LOCAL_LIBRARIES, candidates};
 use crate::game::{Candidate, Note, Reason};
@@ -38,9 +35,7 @@ fn has_note(survey: &crate::game::Survey, wanted: fn(&Note) -> bool) -> bool {
 
 #[test]
 fn an_unreal_install_ranks_the_shipping_binary_above_the_launcher_that_starts_it() {
-    // The shape this whole slice exists for: a small launcher at the root that
-    // spawns the real binary four directories down, the engine's crash reporter
-    // beside it, and no name list anywhere deciding between them.
+    // A root launcher, the real binary four levels down, and a crash reporter.
     let dir = TempDir::new("unreal");
     dir.image("Satisfactory.exe", &["KERNEL32.dll"], &[]);
     dir.image(
@@ -76,10 +71,7 @@ fn an_unreal_install_ranks_the_shipping_binary_above_the_launcher_that_starts_it
 
 #[test]
 fn the_upscaler_beside_the_shipping_binary_is_not_credited_to_the_launcher_at_the_root() {
-    // The bug predicted when `dxray-core` was finished: an Unreal game keeps
-    // its DLSS libraries in `Binaries/Win64`, not at the install root, and
-    // evidence gathered from the root and pinned on a binary three levels down
-    // would make every executable in the tree look equally equipped.
+    // Evidence comes from each executable's own directory.
     let dir = TempDir::new("perdir");
     dir.image("Launcher.exe", &["KERNEL32.dll"], &[]);
     dir.image(
@@ -107,10 +99,7 @@ fn the_upscaler_beside_the_shipping_binary_is_not_credited_to_the_launcher_at_th
 
 #[test]
 fn a_unity_game_outranks_its_own_crash_handler_in_the_same_directory() {
-    // Unity's `.exe` is a stub: it imports `UnityPlayer.dll` and nothing
-    // graphical, so the strongest signal in the module is silent on it. The
-    // `_Data` directory and the one link into `UnityPlayer.dll` are what keep
-    // it above a handler that shares every neighbour it has.
+    // Unity's stub rises above the handler on `_Data` and `UnityPlayer.dll`.
     let dir = TempDir::new("unity");
     dir.image("MyGame.exe", &["UnityPlayer.dll", "KERNEL32.dll"], &[]);
     dir.image("UnityPlayer.dll", &["d3d11.dll", "d3d12.dll"], &[]);
@@ -139,10 +128,7 @@ fn a_unity_game_outranks_its_own_crash_handler_in_the_same_directory() {
 
 #[test]
 fn a_directory_holding_only_redistributables_reports_them_and_says_it_found_nothing() {
-    // `vcredist_x64.exe` sinks on its own merits — it has no evidence — rather
-    // than by appearing on a list of names that would one day hide a real game.
-    // The executables are still listed: "there is nothing here that looks like
-    // a game" is an answer, and an empty list is not the same answer.
+    // A redistributable sinks for lack of evidence, and stays listed.
     let dir = TempDir::new("redist");
     dir.image(
         "_CommonRedist/vcredist/vcredist_x64.exe",
@@ -188,11 +174,7 @@ fn a_lone_executable_that_imports_nothing_at_all_is_ranked_and_declared_uneviden
 
 #[test]
 fn a_java_game_is_ranked_on_structure_and_the_listing_says_that_is_all_it_had() {
-    // Project Zomboid draws from `jre64/bin/java.exe`, buried in a
-    // subdirectory. Neither it nor the launcher imports a graphics API, because
-    // the JVM loads the renderer with LoadLibrary long after startup. The
-    // ranking is still worth having and must not be printed as though an import
-    // table stood behind it.
+    // A Java game imports no renderer; its ranking says so.
     let dir = TempDir::new("java");
     dir.image("ProjectZomboid64.exe", &["KERNEL32.dll"], &[]);
     dir.image("ProjectZomboid32.exe", &["KERNEL32.dll"], &[]);
@@ -220,12 +202,7 @@ fn a_java_game_is_ranked_on_structure_and_the_listing_says_that_is_all_it_had() 
 
 #[test]
 fn a_game_that_ties_with_an_unrelated_program_says_so_instead_of_winning_on_the_alphabet() {
-    // Importing a renderer is not a games-only signal. An Electron main process
-    // does it as a matter of course, and so does at least one shipped security
-    // product. Put such a binary beside a game whose only evidence is its own
-    // import — no engine layout to carry it — and they tie at 100, with the top
-    // slot going to whichever sorts first. Nothing in the numbers says that was
-    // a coin toss, so the note has to.
+    // Two binaries that only import a renderer tie, and the note says so.
     let dir = TempDir::new("tie");
     dir.image(
         "Fortress.exe",
@@ -255,9 +232,7 @@ fn a_game_that_ties_with_an_unrelated_program_says_so_instead_of_winning_on_the_
 
 #[test]
 fn a_binary_below_the_depth_limit_is_reported_missing_rather_than_silently_dropped() {
-    // The wrong-answer shape this bound exists to avoid: a truncated walk that
-    // reports the launcher because it never reached the real binary, with
-    // nothing in the output to say the walk stopped early.
+    // A truncated walk says it stopped early.
     let dir = TempDir::new("deep");
     let mut path = String::new();
     for _ in 0..=MAX_DEPTH {
@@ -349,13 +324,8 @@ fn a_directory_that_is_not_there_fails_rather_than_coming_back_as_an_empty_ranki
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 }
 
-/// A permission error on one folder must not sink a survey that is otherwise
-/// complete, for the same reason one corrupt manifest does not sink a Steam
-/// library.
-///
-/// Unix only, because taking read permission away from a directory is the only
-/// portable way to build the case and Windows does not spell it the same way.
-/// The behaviour under test is not platform-specific; the fixture is.
+/// One unreadable folder does not sink an otherwise complete survey. Unix
+/// only, for the fixture.
 #[cfg(unix)]
 #[test]
 fn a_subdirectory_that_cannot_be_read_costs_itself_and_no_other_part_of_the_tree() {
@@ -417,26 +387,9 @@ fn the_name_of_the_directory_is_used_when_the_caller_supplies_no_name_at_all() {
 
 #[test]
 fn the_walk_budgets_are_the_numbers_they_are_documented_to_be() {
-    // Every other test here builds its fixture *from* these constants, so the
-    // fixture resizes with the constant and the limit is proved to exist while
-    // its value is pinned by nothing. Changing 8 to 3 or 512 to 4 broke no test.
-    // These are the values, and the reasons they are not other values:
-    //
-    //   MAX_DEPTH 32 — far outside anything an installer lays down, so that
-    //   reaching it means the tree is generated or extracted rather than
-    //   shipped. It was 8, and 8 is inside the range of real games: two installs
-    //   of five in a measured library truncated at it on ordinary asset trees
-    //   at depth nine. Raising it costs no bound, because MAX_DIRECTORIES is
-    //   what bounds the work and the walk does not follow symlinks.
-    //
-    //   MAX_EXECUTABLES 512 — a large install has tens. The number is far past
-    //   anything real on purpose: reaching it means the directory is wrong, not
-    //   the budget, and a smaller one would truncate ordinary installs and
-    //   report the truncation as if it were that same anomaly.
-    //
-    //   MAX_LOCAL_LIBRARIES 16 — one link deep through the imports that sit in
-    //   the executable's own directory. A stub loader names its engine DLL
-    //   somewhere in a normal-sized import table, not necessarily first.
+    // The values themselves, since fixtures are built from the constants. Depth
+    // 8 truncated two of five real games; 512 executables means the directory is
+    // wrong; 16 libraries is one link through a normal import table.
     assert_eq!(MAX_DEPTH, 32);
     assert_eq!(MAX_EXECUTABLES, 512);
     assert_eq!(MAX_LOCAL_LIBRARIES, 16);

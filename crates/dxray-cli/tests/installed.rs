@@ -1,10 +1,5 @@
 //! End to end tests for `installed`: the real binary, a fake machine with two
-//! launchers on it, real exit codes.
-//!
-//! The trees are built here rather than found on the machine because there is
-//! neither a Steam nor a Heroic on it. What these prove is that the layouts
-//! `dxray-core` believes in are handled uniformly — that no launcher is
-//! privileged by the listing and none is silently left out of it.
+//! launchers, real exit codes. No launcher is privileged or left out.
 
 mod common;
 
@@ -237,10 +232,8 @@ fn fake_steam(home: &TempDir) -> PathBuf {
     root
 }
 
-/// Adds a second Steam manifest for content Steam labels as a tool.  The
-/// command-line inventory deliberately includes it: `installed` answers
-/// what Steam says is installed, not the narrower question of what is
-/// launchable as a user game.
+/// Adds a Steam manifest for content Steam labels as a tool. `installed`
+/// lists it: it answers what is installed, not what is launchable.
 fn fake_steam_tool(home: &TempDir) -> PathBuf {
     let root = fake_steam(home);
     let steamapps = root.join("steamapps");
@@ -257,10 +250,7 @@ fn fake_steam_tool(home: &TempDir) -> PathBuf {
 }
 
 /// Builds a Heroic configuration under `home` holding one GOG game.
-///
-/// `store_cache` is what makes a directory a Heroic installation, so it is
-/// created even when no cache file is written into it — that is the shape of an
-/// installed Heroic nobody has signed into.
+/// `store_cache` alone makes an installation, as when nobody has signed in.
 fn fake_heroic(home: &TempDir, with_game: bool) -> PathBuf {
     let root = home.path().join(".config/heroic");
     std::fs::create_dir_all(root.join("store_cache")).expect("store_cache");
@@ -286,9 +276,7 @@ fn fake_heroic(home: &TempDir, with_game: bool) -> PathBuf {
 
 #[test]
 fn every_launcher_on_the_machine_is_listed_and_the_full_view_names_each_game_source() {
-    // The whole point of the flag. Somebody scripting `dxray steam` to audit
-    // their library got an incomplete answer with no signal that it was
-    // incomplete: the Heroic games were simply not there.
+    // Both launchers' games are listed.
     let home = TempDir::new("games-both");
     let steam = fake_steam(&home);
     let heroic = fake_heroic(&home, true);
@@ -325,10 +313,7 @@ fn every_launcher_on_the_machine_is_listed_and_the_full_view_names_each_game_sou
 
 #[test]
 fn installed_keeps_the_complete_steam_inventory_including_proton() {
-    // This fixture intentionally contains one ordinary game and one
-    // `DownloadType=1` runtime.  The identity set below is the contract the
-    // TUI must eventually share: discovery is not allowed to silently turn an
-    // installed Steam record into an absent one merely because it is tooling.
+    // A `DownloadType=1` runtime is listed like any other install.
     let home = TempDir::new("installed-steam-game-and-proton");
     fake_steam_tool(&home);
 
@@ -351,9 +336,7 @@ fn installed_keeps_the_complete_steam_inventory_including_proton() {
 
 #[test]
 fn one_trailer_counts_both_launchers_rather_than_one_per_launcher() {
-    // The line a person reads. It has always meant "games, in the places games
-    // live, across the installs that hold them", and it has to keep meaning
-    // that when the places come from two launchers instead of one.
+    // The trailer counts across both launchers.
     let home = TempDir::new("games-trailer");
     fake_steam(&home);
     fake_heroic(&home, true);
@@ -373,9 +356,7 @@ fn one_trailer_counts_both_launchers_rather_than_one_per_launcher() {
 
 #[test]
 fn a_machine_with_only_one_launcher_on_it_gets_an_honest_trailer() {
-    // No "0 games in 0 libraries across 0 installs" for the launcher that is
-    // not installed, and no hedging about it either. The sentence describes
-    // what is there.
+    // An absent launcher gets no zero line.
     let home = TempDir::new("games-heroic-only");
     fake_heroic(&home, true);
 
@@ -386,10 +367,8 @@ fn a_machine_with_only_one_launcher_on_it_gets_an_honest_trailer() {
         text.contains("1 game in 1 library across 1 install"),
         "got:\n{text}"
     );
-    // Not "the word Steam never appears": the NVAPI row on a Heroic game says
-    // in full that it has no Steam AppID, which is the sentence that stops a
-    // blank reading as a verdict. What must not appear is a Steam root or a
-    // Steam library, because there is not one.
+    // The NVAPI row may say "no Steam AppID"; there is no Steam root or
+    // library.
     assert!(
         !text.contains("/.steam/"),
         "a launcher that is not installed contributes no root and no library, \
@@ -400,9 +379,7 @@ fn a_machine_with_only_one_launcher_on_it_gets_an_honest_trailer() {
 
 #[test]
 fn an_installed_launcher_holding_nothing_is_counted_rather_than_hidden() {
-    // The same situation an empty Steam library has always been shown in. A
-    // Heroic that is installed and empty is a fact about the machine; making it
-    // vanish would be the silent incompleteness this flag exists to end.
+    // An empty Heroic is shown, as an empty Steam library is.
     let home = TempDir::new("games-heroic-empty");
     let root = fake_heroic(&home, false);
 
@@ -430,9 +407,7 @@ fn an_installed_launcher_holding_nothing_is_counted_rather_than_hidden() {
 
 #[test]
 fn a_launcher_that_cannot_be_read_does_not_hide_the_other_launcher_s_games() {
-    // The rule the exit code must not be allowed to shortcut. One broken
-    // launcher is a reason to say so, never a reason to drop what the other one
-    // found — and the status still has to admit that something was missed.
+    // One broken launcher keeps the other's games, and exits 1.
     let home = TempDir::new("games-broken-steam");
     let steam = fake_steam(&home);
     fake_heroic(&home, true);
@@ -467,11 +442,7 @@ fn a_launcher_that_cannot_be_read_does_not_hide_the_other_launcher_s_games() {
 
 #[test]
 fn a_stale_heroic_record_for_a_game_that_was_found_anyway_leaves_the_scan_clean() {
-    // Measured on a real machine: a cache record with no install_path moved the
-    // exit code while the game it named was found from another cache in the
-    // same configuration, ranked, and printed. Nothing was hidden from anybody,
-    // so nothing should have been reported to a script — but the record is
-    // still wrong, so it is still printed, as a note.
+    // A stale record for a game found elsewhere is a note, not a failure.
     let home = TempDir::new("games-stale-record");
     let root = fake_heroic(&home, true);
     std::fs::write(
@@ -498,10 +469,7 @@ fn a_stale_heroic_record_for_a_game_that_was_found_anyway_leaves_the_scan_clean(
         "and says why it cost nothing, got:
 {text}"
     );
-    // The trailer, end to end, because that is the line people quote. This run
-    // has a stale record and a perfectly good index, and the sentence used to
-    // read "1 index declared no libraries, so there may be more" — a doubt
-    // about libraries that were all read, pointing at a file nobody touched.
+    // The trailer does not blame an index for a stale record.
     assert!(
         text.contains(
             "1 game in 1 library across 1 install; 1 launcher record could not be used, \
@@ -522,9 +490,7 @@ fn a_stale_heroic_record_for_a_game_that_was_found_anyway_leaves_the_scan_clean(
 {text}"
     );
 
-    // And the same sentence where a program reads it. `caveats` is the clause
-    // list the trailer is built from, so a wrong clause is wrong on both
-    // surfaces at once — which is the point of there being one list.
+    // Nor does `caveats`, the list the trailer is built from.
     let json = dxray_with_home(home.path(), ["installed", "--json"]);
     let stream = stdout_of(&json);
 
@@ -546,10 +512,7 @@ fn a_stale_heroic_record_for_a_game_that_was_found_anyway_leaves_the_scan_clean(
 
 #[test]
 fn a_machine_with_no_launcher_at_all_says_where_it_looked_under_each_name() {
-    // An empty listing and a 0 would be the output a working scan of an empty
-    // machine produces, and the two states are not the same state. The
-    // candidates are grouped per launcher, because a flat run of a dozen paths
-    // does not tell anybody which of them was a Heroic that is not there.
+    // Nothing found exits 1 and lists candidates per launcher.
     let home = TempDir::new("games-nothing");
 
     let out = dxray_with_home(home.path(), ["installed"]);
@@ -574,10 +537,7 @@ fn a_machine_with_no_launcher_at_all_says_where_it_looked_under_each_name() {
 
 #[test]
 fn the_narrower_flag_still_answers_only_the_narrower_question() {
-    // `steam` is kept because it is honest about what it answers. On a
-    // machine with both launchers it must still show Steam and only Steam, and
-    // it must not start labelling every row with the one launcher the flag
-    // already named.
+    // `steam` still shows only Steam, with no launcher label.
     let home = TempDir::new("games-steam-still-narrow");
     fake_steam(&home);
     fake_heroic(&home, true);
@@ -627,12 +587,8 @@ fn installed_accepts_json_but_rejects_paths_and_recursive() {
     }
 }
 
-/// A machine with one of everything the listing has to survive: a game, an
-/// entry that is tooling, a Heroic record that lost its install path, a
-/// manifest that cannot be read, and an install too deep to search in full.
-///
-/// One fixture rather than five, because what is being checked is that none of
-/// these five states can hide any of the others from either surface.
+/// A game, a tool, a stale Heroic record, an unreadable manifest and a
+/// truncated install, together, so none can hide another.
 fn crowded(home: &TempDir) -> (PathBuf, PathBuf) {
     let steam = fake_steam_tool(home);
     // A manifest that stops mid-record: a game the user owns and this tool
@@ -642,9 +598,7 @@ fn crowded(home: &TempDir) -> (PathBuf, PathBuf) {
         "\"AppState\"\n{\n\t\"appid\"\t\"999\"\n\t\"name\"\t\"Trunc",
     )
     .expect("a truncated manifest beside the good ones");
-    // A binary below the depth bound, so the walk of that install runs out of
-    // budget and the executable named for it may not be the right one. From
-    // the constant, so the fixture resizes with the bound.
+    // Past the depth bound, from the constant.
     let mut buried = steam.join("steamapps/common/Proton - Experimental");
     for _ in 0..=dxray_core::install::MAX_DEPTH {
         buried.push("down");
@@ -664,10 +618,7 @@ fn crowded(home: &TempDir) -> (PathBuf, PathBuf) {
 
 #[test]
 fn the_json_listing_carries_everything_the_terminal_listing_carries() {
-    // The whole point of the flag: a program that wants to know what is
-    // installed no longer has to count columns in an indented listing or
-    // reimplement two launchers' discovery. Every state the fixture holds has
-    // to be findable in the stream, including the three that are not games.
+    // Every state in the fixture is in the stream.
     let home = TempDir::new("games-json");
     let (steam, heroic) = crowded(&home);
 
@@ -744,10 +695,7 @@ fn the_json_listing_carries_everything_the_terminal_listing_carries() {
 
 #[test]
 fn asking_for_json_changes_the_rendering_and_nothing_a_run_calls_a_failure() {
-    // The exit code answers whether everything asked about was read. A flag
-    // that chooses how to print the answer must not be able to change what the
-    // answer is — including on the run where nothing was found at all, which
-    // still names where it looked and still exits 1.
+    // `--json` never changes the exit code, even when nothing is found.
     let crowded_home = TempDir::new("games-json-status");
     crowded(&crowded_home);
     let clean_home = TempDir::new("games-json-clean");
@@ -779,10 +727,7 @@ fn asking_for_json_changes_the_rendering_and_nothing_a_run_calls_a_failure() {
 
 #[test]
 fn a_machine_with_no_launcher_answers_json_with_a_sentence_rather_than_nothing() {
-    // Zero lines of JSONL reads exactly like a machine that owns no games, and
-    // the two states are not the same state. There is no summary — nothing was
-    // scanned, so there is nothing to count — and the one object says what a
-    // person is told on stderr.
+    // Nothing found is one object, not an empty stream.
     let home = TempDir::new("games-json-nothing");
 
     let out = dxray_with_home(home.path(), ["installed", "--json"]);
@@ -816,9 +761,7 @@ fn a_path_given_alongside_games_is_a_usage_error_rather_than_a_silently_ignored_
 
 #[test]
 fn the_help_names_the_flag_and_what_its_exit_codes_mean() {
-    // The exit-code contract is stated in --help and a new mode that moves the
-    // codes has to be stated there with it, or the contract is only true of the
-    // modes that existed when it was written.
+    // `--help` states the exit codes of every mode.
     let out = dxray_with_home(TempDir::new("games-help").path(), ["--help"]);
     let text = stdout_of(&out);
 
@@ -831,10 +774,7 @@ fn the_help_names_the_flag_and_what_its_exit_codes_mean() {
 
 #[test]
 fn the_demoted_half_of_one_library_does_not_sink_past_the_next_library() {
-    // The output is a tree — install, library, then games — and the grouping
-    // has to happen inside a library or the tree is not one. A Steam runtime
-    // printed after the Heroic games would put it under a heading that says
-    // nothing about where it lives.
+    // Grouping happens within each library.
     let home = TempDir::new("games-order");
     let root = fake_steam_tool(&home);
     let heroic = fake_heroic(&home, true);
@@ -877,13 +817,8 @@ fn the_demoted_half_of_one_library_does_not_sink_past_the_next_library() {
 
 #[test]
 fn a_failure_in_a_launchers_own_index_names_no_library_in_the_json() {
-    // The same broken machine as the test above, read by a program. The file
-    // that failed is the launcher's own index — the one that would have said
-    // where the libraries are — so there is no library to name, and `library`
-    // is `null`. Filling it in with the install path would invent a
-    // per-library read failure out of a failure that touched no library, and a
-    // consumer grouping problems by library would file it under a directory
-    // nobody opened. An absent answer must not be dressed as a wrong one.
+    // A failed launcher index touches no library, so `library` is `null`,
+    // not the install path.
     let home = TempDir::new("games-broken-steam-json");
     let steam = fake_steam(&home);
     fake_heroic(&home, true);

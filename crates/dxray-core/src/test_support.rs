@@ -1,6 +1,4 @@
-//! Test fixtures shared by consumers of the launcher inventory contract.
-//!
-//! Feature-gated test setup using real adapters with temporary roots.
+//! Test fixtures for consumers of the launcher inventory, on real adapters.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,10 +8,8 @@ use crate::{Catalogue, Inventory, Launcher, Libraries, Origin, heroic, steam};
 
 static NEXT_DIRECTORY: AtomicU32 = AtomicU32::new(0);
 
-/// A Steam and Heroic installation tree for consumer parity tests.
-///
-/// Includes a valid and corrupt Steam manifest plus a duplicated Heroic GOG
-/// record, yielding an entry, note and problem through real adapters.
+/// A Steam and Heroic tree yielding an entry, a note and a problem: valid and
+/// corrupt Steam manifests, and a duplicated Heroic GOG record.
 pub struct SteamHeroicFixture {
     _directory: TempDir,
     steam: AtRoot,

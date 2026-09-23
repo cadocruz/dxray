@@ -1,7 +1,5 @@
-//! Everything here is a layout written out by hand. No disk, no game.
-//!
-//! The assertions are about **order**, not membership. A ranking that contains
-//! the right executable somewhere in it is not a ranking.
+//! Layouts written by hand, no disk. The assertions are about order, not
+//! membership.
 
 use super::{Candidate, NameFrom, Note, Observed, Reason, Resemblance, Survey, assess, weight};
 use crate::analysis::{Evidence, Linked, Source, Verdict, analyse};
@@ -30,12 +28,8 @@ fn delay_loading(names: &[&str]) -> Verdict {
     })
 }
 
-/// A verdict built from what libraries in the image's own directory import,
-/// one link on. `direct` is what the image itself imports.
-///
-/// Built through `analyse` rather than assembled by hand, because the point of
-/// the change this tests is that the ranking and the verdict read one set of
-/// evidence. A fixture that bypassed `analyse` could not catch them drifting.
+/// A verdict from the image's own imports (`direct`) and those of libraries
+/// beside it, one link on. Built through `analyse`, so it cannot drift.
 fn linking(direct: &[&str], through: &[(&str, &[&str])]) -> Verdict {
     analyse(&Evidence {
         imports: direct.iter().map(|&n| n.to_owned()).collect(),
@@ -64,9 +58,7 @@ fn names(candidate: &Candidate) -> Vec<String> {
 
 #[test]
 fn the_score_is_exactly_the_arithmetic_of_the_reasons_printed_under_it() {
-    // The number and the sentences are what a reader compares. If they can
-    // disagree, the number is decoration and the explanation is a second
-    // implementation of the ranking that nobody checks.
+    // The score and the sentences cannot disagree.
     let mut observed = at("Game/Binaries/Win64/Game-Win64-Shipping.exe");
     observed.own = importing(&["d3d12.dll"]);
     let candidate = assess(&observed, Some("Game"), None);
@@ -91,10 +83,7 @@ fn the_score_is_exactly_the_arithmetic_of_the_reasons_printed_under_it() {
 
 #[test]
 fn a_renderer_dll_lying_in_the_directory_is_never_renderer_evidence_for_a_binary() {
-    // Every executable in a folder shares its neighbours, so a `d3d12core.dll`
-    // sitting there says exactly as much about the crash handler as about the
-    // game. Treating it as an import would hand both the strongest signal this
-    // module has and leave nothing to tell them apart.
+    // A renderer DLL beside the image is not its import.
     let mut observed = at("Game.exe");
     observed.own = shipping(&["d3d12core.dll"]);
 
@@ -131,10 +120,7 @@ fn a_load_time_import_outranks_the_same_renderer_delay_loaded() {
 
 #[test]
 fn a_renderer_reached_twice_over_is_still_one_capability_and_scores_once() {
-    // A binary that imports `d3d11.dll` *and* ships an engine DLL that imports
-    // it too has one renderer, observed twice. Scoring both would let a
-    // well-stocked directory outrank a game on the strength of one fact
-    // counted again.
+    // One renderer seen twice scores once.
     let mut observed = at("Game.exe");
     observed.own = linking(&["d3d11.dll"], &[("Engine.dll", &["d3d11.dll"])]);
 
@@ -150,10 +136,7 @@ fn a_renderer_reached_twice_over_is_still_one_capability_and_scores_once() {
 
 #[test]
 fn a_stub_that_reaches_a_renderer_only_through_a_local_library_still_says_so() {
-    // This is the Unity shape, and the reason the indirect signal exists at
-    // all: `Game.exe` imports `UnityPlayer.dll` and nothing graphical, and it
-    // is `UnityPlayer.dll` that imports `d3d11.dll`. Without this the strongest
-    // signal in the module is blind to an entire engine.
+    // Unity: `Game.exe` reaches `d3d11.dll` through `UnityPlayer.dll`.
     let mut observed = at("Game.exe");
     observed.own = linking(&[], &[("UnityPlayer.dll", &["d3d11.dll"])]);
 
@@ -169,9 +152,7 @@ fn a_stub_that_reaches_a_renderer_only_through_a_local_library_still_says_so() {
 
 #[test]
 fn several_local_libraries_reaching_one_renderer_are_merged_into_one_reason() {
-    // Three engine DLLs that each import `d3d11.dll` are one capability seen
-    // three times. One reason per library would let the size of a directory
-    // decide the ranking.
+    // Three engine DLLs importing one renderer are one reason.
     let mut observed = at("Game.exe");
     observed.own = linking(&[], &[("b.dll", &["d3d11.dll"]), ("a.dll", &["d3d11.dll"])]);
 
@@ -188,10 +169,7 @@ fn several_local_libraries_reaching_one_renderer_are_merged_into_one_reason() {
 
 #[test]
 fn the_unity_data_directory_has_to_be_named_after_this_executable_and_no_other() {
-    // `Game_Data` beside `UnityCrashHandler64.exe` is the game's data
-    // directory, not the crash handler's. The pairing is the whole signal; a
-    // match on any `_Data` directory in the folder would hand it to every
-    // binary there and break the one tie it exists to break.
+    // Only `Game.exe` pairs with `Game_Data`; the crash handler does not.
     let siblings = vec!["Game_Data".to_owned()];
 
     let mut game = at("Game.exe");
@@ -219,10 +197,7 @@ fn the_data_directory_is_matched_without_regard_to_case() {
 
 #[test]
 fn unreals_engine_tools_do_not_get_the_layout_reason_the_game_gets() {
-    // `Engine/Binaries/Win64` holds the crash reporter and the rest of the
-    // engine's own tooling. The game's `Binaries` is a sibling of `Engine`,
-    // never a child of it, so the two are told apart structurally rather than
-    // by knowing the names of Epic's executables.
+    // The game's `Binaries` is a sibling of `Engine`, never a child.
     let game = at("FactoryGame/Binaries/Win64/FactoryGame-Win64-Shipping.exe");
     let tool = at("Engine/Binaries/Win64/CrashReportClient.exe");
 
@@ -244,9 +219,7 @@ fn unreals_engine_tools_do_not_get_the_layout_reason_the_game_gets() {
 
 #[test]
 fn the_layout_rules_read_the_path_below_the_surveyed_directory_and_not_above_it() {
-    // Pointing the tool at something that happens to live under a folder
-    // called `Binaries` must not hand every executable in the tree a reason it
-    // did not earn.
+    // A `Binaries` folder alone earns nothing.
     let mut observed = at("thing.exe");
     observed.path = PathBuf::from("/opt/Binaries/Win64/thing.exe");
 
@@ -278,9 +251,7 @@ fn the_shipping_suffix_is_read_off_the_end_of_the_stem_only() {
 
 #[test]
 fn a_name_from_the_manifest_outranks_the_same_name_taken_off_the_directory() {
-    // The manifest is evidence from somewhere else; the directory is the same
-    // install talking about itself. They are worth different amounts, and a
-    // reader should be able to see which one was used.
+    // The manifest's name and the directory's are worth different amounts.
     let observed = at("Cyberpunk2077.exe");
 
     let supplied = assess(&observed, Some("Cyberpunk 2077"), Some("Cyberpunk 2077"));
@@ -462,10 +433,8 @@ fn a_ranking_orders_by_score_and_breaks_every_tie_the_same_way_twice() {
 
 #[test]
 fn candidates_the_evidence_cannot_separate_are_ordered_by_how_deep_they_sit() {
-    // A tie-break, not a signal: it scores nothing and shows up in no
-    // explanation. It exists because sorting on the path alone put a launcher
-    // at the install root below a redistributable four directories down, for
-    // no reason a reader could see in the output.
+    // A tie-break that scores nothing: root-level launchers sort above deep
+    // redistributables.
     let unevidenced = |path: &str| Candidate {
         path: PathBuf::from(path),
         reasons: Vec::new(),
@@ -519,14 +488,8 @@ fn a_survey_of_nothing_but_redistributables_reports_that_it_found_no_evidence() 
 
 #[test]
 fn a_truncation_counts_whether_or_not_the_directory_looked_like_a_game() {
-    // One question, not two, and this is the test that says why it cannot be
-    // two. Narrowing a listing's status to entries that carry evidence was
-    // tried, to stop Proton builds and container sysroots costing an exit code
-    // on a healthy machine. It is unsound: the narrowing is only ever consulted
-    // when the walk already truncated, and a truncated walk is itself an
-    // explanation for finding no evidence — the shipping binary may be the part
-    // that was not read. So the zero-evidence case below is the one most likely
-    // to be a game this tool lost, and the last one to call complete.
+    // One question, not two: a truncated walk may be why no evidence was found,
+    // so truncation is never excused by a lack of evidence.
     let truncation = || {
         vec![Note::DepthLimited {
             limit: 32,
@@ -577,9 +540,7 @@ fn a_truncation_counts_whether_or_not_the_directory_looked_like_a_game() {
 
 #[test]
 fn a_truncated_walk_says_that_something_is_missing_rather_than_that_it_is_done() {
-    // The wrong answer this whole module is shaped to avoid is a short list
-    // that looks complete, so every limit has to render into a sentence a
-    // reader cannot mistake for a clean result.
+    // Every limit renders a sentence that cannot pass for a clean result.
     let sentences = [
         Note::DepthLimited {
             limit: 8,
@@ -622,11 +583,8 @@ fn a_truncated_walk_says_that_something_is_missing_rather_than_that_it_is_done()
 
 #[test]
 fn a_ranking_with_no_import_table_under_it_says_so_before_anybody_quotes_it() {
-    // A Java, Electron or .NET game imports no graphics API at all: the runtime
-    // loads the renderer with LoadLibrary after startup, where no import table
-    // can see it. The structural evidence still ranks these, and the ranking is
-    // still worth having, but it is weaker than one an import table backs and
-    // must not be printed as though it were the same thing.
+    // No graphics import at all (Java, Electron, .NET): ranked on structure,
+    // and said to be weaker.
     let mut launcher = at("ProjectZomboid64.exe");
     launcher.sibling_directories = vec!["jre64".to_owned()];
 
@@ -650,9 +608,7 @@ fn a_ranking_with_no_import_table_under_it_says_so_before_anybody_quotes_it() {
 
 #[test]
 fn the_caveat_is_absent_the_moment_one_executable_reaches_a_renderer() {
-    // The other half of the same promise. A note that appears on every survey
-    // is a note nobody reads, and this one has to keep its meaning for the
-    // directories where it is true.
+    // The note appears only where it is true.
     let mut game = at("Game.exe");
     game.own = importing(&["d3d11.dll"]);
     let quiet = at("UnityCrashHandler64.exe");
@@ -673,9 +629,7 @@ fn the_caveat_is_absent_the_moment_one_executable_reaches_a_renderer() {
 
 #[test]
 fn a_renderer_reached_only_through_a_local_library_still_counts_as_an_import_table() {
-    // The caveat is about import tables being silent, and following one link
-    // into a library beside the executable is still reading an import table.
-    // Raising it here would call a Unity game a structure-only guess.
+    // Following one link is still reading an import table.
     let mut observed = at("Game.exe");
     observed.own = linking(&[], &[("UnityPlayer.dll", &["d3d11.dll"])]);
 
@@ -692,10 +646,7 @@ fn a_renderer_reached_only_through_a_local_library_still_counts_as_an_import_tab
 
 #[test]
 fn two_builds_of_one_game_side_by_side_are_both_reported_rather_than_one_chosen() {
-    // Project Zomboid ships a 32-bit and a 64-bit build in the same directory.
-    // Both are real, both are launchable, and there is no evidence anywhere
-    // that says which one the user wants. Picking would be a coin toss printed
-    // as an answer.
+    // Two real builds of one game: reported as a tie, not picked.
     let mut wide = at("ProjectZomboid64.exe");
     wide.sibling_directories = vec!["jre64".to_owned(), "media".to_owned()];
     let mut narrow = at("ProjectZomboid32.exe");
@@ -735,10 +686,7 @@ fn two_builds_of_one_game_side_by_side_are_both_reported_rather_than_one_chosen(
 
 #[test]
 fn two_candidates_sharing_the_top_score_are_reported_as_a_tie() {
-    // Printing a list best-first is itself a claim. When the top two scores are
-    // equal, whichever is printed first got there by the presentation rule, and
-    // a reader has no way to tell that from a result the evidence separated.
-    // This is the exact case where "rank, do not pick" degrades into picking.
+    // Equal top scores are reported as a tie.
     let mut one = at("alpha.exe");
     one.own = importing(&["d3d11.dll"]);
     let mut two = at("zulu.exe");
@@ -775,11 +723,7 @@ fn two_candidates_sharing_the_top_score_are_reported_as_a_tie() {
 
 #[test]
 fn a_tie_is_reported_without_any_idea_of_what_caused_it() {
-    // Two builds of one game tie because both are real; a game ties with an
-    // Electron application or a security product because importing `d3d11.dll`
-    // is ordinary behaviour for a great deal of software that is not a game. A
-    // rule that had to tell those apart would one day meet a third cause it did
-    // not recognise, so there is one rule and one sentence.
+    // One sentence for every tie, whatever its cause.
     let mut game = at("game.exe");
     game.own = importing(&["d3d11.dll"]);
     let mut stranger = at("SomeCorporateThing.exe");
@@ -804,10 +748,7 @@ fn a_tie_is_reported_without_any_idea_of_what_caused_it() {
         Vec::new(),
     );
 
-    // Compared with the digits taken out, because the scores differ and
-    // nothing else may: a tie between a game and a stranger and a tie between
-    // two builds of one game have to read identically, or the wording is
-    // leaking a judgement about the cause that nothing here can support.
+    // Apart from the scores, the two ties read identically.
     let without_numbers = |text: String| {
         let mut out = String::new();
         let mut digits = false;
@@ -869,9 +810,7 @@ fn a_clear_winner_is_not_accused_of_being_a_tie() {
 
 #[test]
 fn a_directory_where_everything_ties_at_nothing_gets_the_better_sentence_instead() {
-    // Every candidate in a folder of installers ties at zero. Saying "five
-    // things tie at the top" there would be true and useless; `has_evidence`
-    // already gives the caller something worth printing.
+    // No tie note when nothing scored.
     let survey = Survey::ranked(
         vec![
             Candidate {
@@ -911,10 +850,7 @@ fn a_tie_means_everything_was_read_and_does_not_fail_the_run() {
 
 #[test]
 fn a_name_can_never_outweigh_where_a_file_sits() {
-    // `PUBG: BATTLEGROUNDS` ships `TslGame.exe`. A ranking that let the title
-    // carry much weight would rank a launcher called `PUBG.exe` above the game
-    // itself, and the absence of the signal has to cost the real binary
-    // nothing.
+    // Without a title match, the real binary loses nothing.
     const {
         assert!(
             weight::NAME_EXACT < weight::UNREAL_BINARIES,
@@ -967,17 +903,12 @@ fn a_renderer_reason_names_every_api_rather_than_choosing_between_them() {
     );
 }
 
-/// One of every shape of [`Reason`] that `assess` can emit.
-///
-/// The `match` at the end is the point of the function: a new variant stops
-/// compiling here until somebody acknowledges it, and the acknowledgement is
-/// next to the list it also has to be added to.
+/// One of every shape of [`Reason`] that `assess` can emit. The `match` makes
+/// a new variant fail to compile here.
 fn every_reason_assess_can_build() -> Vec<Reason> {
     let all = vec![
-        // `Source::Linked` and `Source::Neighbour` are dropped by
-        // `links_renderer`, which is what
-        // `a_renderer_dll_lying_in_the_directory_is_never_renderer_evidence_for_a_binary`
-        // holds down. These two are the sources that reach this variant.
+        // `Linked` and `Neighbour` are dropped by `links_renderer`; these two
+        // reach this variant.
         Reason::LinksRenderer {
             apis: vec!["Direct3D 12".to_owned()],
             source: Source::Import,
@@ -1027,12 +958,7 @@ fn every_reason_assess_can_build() -> Vec<Reason> {
 
 #[test]
 fn every_reason_assess_can_build_is_worth_more_than_nothing() {
-    // The premise the `weight` module documents, and the one the TUI's two
-    // separate evidence questions lean on: a score of zero and an empty list of
-    // reasons have to be the same state. A reason worth nothing would make a
-    // scored candidate that observed something look exactly like one that
-    // observed nothing, and the row and the pane under it would then disagree
-    // on screen.
+    // A score of zero and no reasons are the same state.
     for reason in every_reason_assess_can_build() {
         let candidate = Candidate {
             path: PathBuf::from("Game.exe"),

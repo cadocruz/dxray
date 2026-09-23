@@ -1,9 +1,5 @@
-//! The version stamped into a binary's resources.
-//!
-//! This is how a DLSS runtime announces which build it is. The number is not in
-//! the file name and not in any manifest — `nvngx_dlss.dll` is called that in
-//! every version ever shipped — so the only honest way to tell 3.7.20 from
-//! 310.2.1 is to read it out of the file.
+//! The version stamped into a binary's resources: the only way to tell one
+//! build of `nvngx_dlss.dll` from another.
 
 use std::fmt;
 
@@ -67,11 +63,8 @@ pub struct VersionInfo {
 }
 
 impl Pe<'_> {
-    /// Reads `VS_FIXEDFILEINFO` out of the resource tree.
-    ///
-    /// Returns `Ok(None)` when the image carries no version resource, which is
-    /// ordinary — plenty of game executables ship without one — and is not the
-    /// same as a resource tree that could not be read.
+    /// Reads `VS_FIXEDFILEINFO` out of the resource tree. `Ok(None)` when the
+    /// image carries no version resource, which is ordinary.
     ///
     /// # Errors
     /// Returns [`Error`] when the resource tree is malformed or runs outside
@@ -81,11 +74,8 @@ impl Pe<'_> {
             return Ok(None);
         };
 
-        // VS_VERSIONINFO leads with a UTF-16 key and pads to a 4-byte boundary
-        // before the fixed part. Rather than recompute that alignment, find the
-        // signature inside this one small blob, which the resource tree has
-        // already vouched for. A blind scan of the whole file would not be safe
-        // to do this way; a scan of a located resource is.
+        // Find the signature inside this small, located blob rather than
+        // recompute the key's padding.
         let Some(at) = (0..blob.len().saturating_sub(3))
             .step_by(4)
             .find(|&i| read_u32(blob, i) == Ok(FIXED_INFO_SIGNATURE))
@@ -99,10 +89,8 @@ impl Pe<'_> {
         }))
     }
 
-    /// Walks type → name → language and returns the bytes of the first leaf of
-    /// `type_id`. Only the type is matched; the first name and first language
-    /// are taken, because a binary with several is a binary whose extra copies
-    /// are localisations of the same number.
+    /// Walks type, name and language, returning the first leaf of `type_id`.
+    /// Other names and languages are localisations of the same number.
     fn resource(&self, type_id: u32) -> Result<Option<&[u8]>> {
         let Some(&(base_rva, _)) = self.directories.get(DIR_RESOURCE) else {
             return Ok(None);
@@ -127,9 +115,8 @@ impl Pe<'_> {
             at = base + offset;
         }
 
-        // IMAGE_RESOURCE_DATA_ENTRY. Its OffsetToData is an RVA, unlike every
-        // other offset in the tree - a mismatch that is easy to miss and lands
-        // in the middle of the section when missed.
+        // IMAGE_RESOURCE_DATA_ENTRY: its OffsetToData is an RVA, unlike every
+        // other offset in the tree.
         let data_rva = read_u32(self.buf, at)?;
         let size = read_u32(self.buf, at + 4)? as usize;
         let start = self.offset_of(data_rva)?;
@@ -143,11 +130,8 @@ impl Pe<'_> {
             .map(Some)
     }
 
-    /// One entry from a resource directory: `Some((offset, is_directory))`.
-    ///
-    /// With `want`, matches an integer id; without, takes the first entry there
-    /// is. Named entries are stored before integer ones, so an id lookup skips
-    /// past them rather than comparing a string offset against a number.
+    /// One entry from a resource directory: `Some((offset, is_directory))`. With
+    /// `want`, an integer id past the named entries; without, the first entry.
     fn resource_entry(&self, dir_at: usize, want: Option<u32>) -> Result<Option<(usize, bool)>> {
         let named = read_u16(self.buf, dir_at + 12)? as usize;
         let by_id = read_u16(self.buf, dir_at + 14)? as usize;

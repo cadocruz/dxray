@@ -1,10 +1,5 @@
-//! Unit tests for the parts no caller can reach.
-//!
-//! The integration suite in `tests/` can only drive the public API, which means
-//! it exercises RVA translation and name reading only through whatever shapes a
-//! valid image happens to produce. These build the private state directly, so
-//! the awkward cases — a section larger in memory than on disk, a name with no
-//! terminator — can be aimed at on purpose.
+//! Unit tests for private state the public API cannot aim at: sections larger
+//! in memory than on disk, unterminated names.
 
 use super::{Error, MAX_NAME, Machine, Pe, Section, read_u16, read_u32};
 
@@ -99,9 +94,7 @@ fn an_rva_outside_every_section_is_refused_rather_than_clamped() {
 
 #[test]
 fn the_part_of_a_section_that_exists_only_in_memory_is_never_read_from_the_file() {
-    // 0x800 bytes mapped, 0x200 stored: the loader zero-fills the rest. Reading
-    // it out of the file would hand back whatever the linker put after the
-    // section on disk, and that garbage would parse as a perfectly good name.
+    // The loader zero-fills past the stored bytes; they are not read from the file.
     let buf = [0u8; 0x600];
     let pe = mapped(&buf, vec![section(0x1000, 0x800, 0x400, 0x200)]);
 
@@ -112,13 +105,8 @@ fn the_part_of_a_section_that_exists_only_in_memory_is_never_read_from_the_file(
 
 #[test]
 fn a_raw_pointer_that_overflows_when_the_delta_is_added_is_refused() {
-    // Both halves come out of a section header, so nothing stops their sum
-    // leaving the address space. Unchecked this panicked in a debug build and
-    // wrapped in a release one, and the wrapped offset — 0xFFFF_FD00 + 0x500
-    // is 0x200 once the top bit is gone — lands back inside a small file, on
-    // bytes the header never pointed at. What comes back from there still
-    // reads as a perfectly good DLL name, so the failure mode is a confident
-    // wrong answer rather than a missing one.
+    // A header-supplied sum past `u32` is an error; wrapping used to read a
+    // plausible name from the wrong bytes.
     let buf = [0u8; 0x600];
     let pe = mapped(&buf, vec![section(0x1000, 0x2000, 0xFFFF_FD00, 0x2000)]);
 
@@ -158,9 +146,7 @@ fn a_name_reads_up_to_its_terminator() {
 
 #[test]
 fn a_name_with_no_terminator_is_an_error_and_not_an_empty_string() {
-    // The regression this exists for: returning "" here would make a corrupt
-    // import descriptor read as a DLL with no name, which downstream is
-    // indistinguishable from a game that imports nothing.
+    // An unterminated name is an error, not an empty name.
     let buf = vec![b'A'; 0x400 + MAX_NAME + 16];
     let pe = mapped(&buf, vec![section(0x1000, 0x400, 0x400, 0x400)]);
 
@@ -184,9 +170,7 @@ fn a_name_is_read_when_its_terminator_sits_just_inside_the_limit() {
 
 #[test]
 fn an_image_whose_directory_table_is_short_reports_no_imports_rather_than_failing() {
-    // NumberOfRvaAndSizes is a field, not a constant: an image may declare
-    // fewer than 14 directories, in which case there is no delay-load entry to
-    // index at all.
+    // An image may declare fewer than 14 directories.
     let buf = [0u8; 0x600];
     let mut pe = mapped(&buf, vec![section(0x1000, 0x200, 0x400, 0x200)]);
     pe.directories = vec![(0, 0), (0, 0)];
@@ -197,15 +181,8 @@ fn an_image_whose_directory_table_is_short_reports_no_imports_rather_than_failin
 
 #[test]
 fn a_16_bit_new_executable_is_rejected_rather_than_read_as_a_pe() {
-    // Not hypothetical. Six files in SysWOW64 on a stock Windows 11 install are
-    // these: compobj.dll, ole2.dll, ole2disp.dll, ole2nls.dll, storage.dll and
-    // typelib.dll, all 8960 bytes and hardlinked to each other, kept for OLE1
-    // compatibility since Windows 3.x. They carry a valid MZ header and an
-    // e_lfanew of 0x400, and at 0x400 sits "NE" where "PE" would be.
-    //
-    // A parser that checked only the DOS header would march into a 16-bit
-    // segmented header and read whatever the fields there happened to line up
-    // with. The signature check is what makes that impossible.
+    // An NE image behind a valid MZ header, like six OLE1 files in SysWOW64.
+    // The signature check stops the parser there.
     let mut buf = vec![0u8; 0x500];
     buf[0] = b'M';
     buf[1] = b'Z';

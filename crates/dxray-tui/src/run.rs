@@ -36,13 +36,8 @@ pub fn run() -> io::Result<()> {
     result.and(restored)
 }
 
-/// Gives the terminal back, and only then waits for the workers.
-///
-/// Cancellation is cooperative and is polled between filesystem operations, so
-/// a scan inside `dxray_core::candidates` on a stale mount can take as long as
-/// the mount does. Joining first meant the user pressed Esc and then watched a
-/// frozen alternate screen until the walk returned. Restoring first hands the
-/// shell back immediately; the join still happens, and no worker draws.
+/// Gives the terminal back, and only then waits for the workers: a walk on a
+/// stale mount can hold the join long after Esc.
 fn hand_back<R>(restore: R, workers: Option<Workers>) -> io::Result<()>
 where
     R: FnOnce() -> io::Result<()>,
@@ -158,9 +153,8 @@ fn spawn_input(cancellation: Cancellation, handle: ProgramHandle<Msg>) -> JoinHa
     })
 }
 
-/// A separate completion signal stops the ticker while keeping input alive
-/// after a normal scan. It is intentionally distinct from cancellation, which
-/// shuts down every worker when the application exits.
+/// Stops the ticker once a scan completes, keeping input alive. Distinct from
+/// cancellation, which stops every worker on exit.
 #[derive(Clone)]
 struct Scanning(Arc<AtomicBool>);
 
@@ -212,11 +206,8 @@ fn spawn_scan(
     })
 }
 
-/// Streams [`dxray_core::walk`] events to the UI.
-///
-/// The TUI must emit while discovery runs; it does not collect an `Inventory`.
-/// `false` means cancellation or a closed receiver. Injected launchers cover
-/// empty installations in tests.
+/// Streams [`dxray_core::walk`] events to the UI. `false` means cancellation
+/// or a closed receiver.
 fn scan_launchers(
     launchers: &[&dyn dxray_core::Launcher],
     cancellation: &Cancellation,
@@ -232,8 +223,6 @@ fn scan_launchers(
 }
 
 /// Converts walk events to UI messages.
-///
-/// Cancellation and a closed receiver stop the walk at its next event boundary.
 struct Stream<'a> {
     cancellation: &'a Cancellation,
     handle: &'a ProgramHandle<Msg>,
@@ -328,14 +317,8 @@ impl dxray_core::Visitor for Stream<'_> {
         }
         for game in catalogue.games {
             self.live()?;
-            // `walk` supplies the same inventory to CLI and TUI. Do not
-            // classify or deduplicate it again here: Steam's DownloadType
-            // does not reliably distinguish games from tools.
-            // One call, shared with `dxray --installed`, so that the facts
-            // established about a game cannot depend on which surface asked.
-            // The launchers' capability difference is spent inside it rather
-            // than here: a Steam appid names a compatibility prefix, and a
-            // native identity is told so in a sentence naming its own launcher.
+            // The same inventory and the same inspection as `dxray --installed`;
+            // nothing is reclassified here.
             let facts = dxray_core::inspect(&game, self.root.as_deref(), library, &mut self.builds);
             self.live()?;
             let entry = Entry::build(game, library.to_path_buf(), facts.survey, facts.nvapi);
@@ -405,10 +388,7 @@ mod tests {
 
     #[test]
     fn the_terminal_comes_back_before_the_workers_are_waited_for() {
-        // The order is the whole fix. Cancellation is only polled between
-        // filesystem operations, so a worker inside a walk on a stale mount
-        // holds the join for as long as the mount takes; doing that first left
-        // the user looking at a frozen alternate screen after pressing Esc.
+        // Restore before join, so Esc never leaves a frozen screen.
         let order = Arc::new(Mutex::new(Vec::new()));
         let worker = Arc::clone(&order);
         let workers = Workers {
@@ -462,10 +442,8 @@ mod tests {
         roots: Vec<PathBuf>,
         games: Vec<dxray_core::Game>,
         notes: Vec<String>,
-        /// What this launcher's catalogue reports as costing nothing — a stale
-        /// Heroic record for a game another cache supplied, in the real case.
-        /// Held apart from `notes`, which are the *library* notes: the two
-        /// arrive by different routes and only one of them had a test.
+        /// Catalogue notes, held apart from the library `notes`: they arrive by
+        /// a different route.
         catalogue_notes: Vec<String>,
     }
 
@@ -547,11 +525,7 @@ mod tests {
 
     #[test]
     fn an_installed_launcher_whose_library_holds_no_games_is_still_counted() {
-        // The whole point of the slice. An empty Steam library has always been
-        // announced; an installed Heroic with nothing installed used to vanish
-        // from the header, and those are the same situation. The counter the
-        // user reads says "libraries games could be in", not "libraries that
-        // happened to have one".
+        // An empty installation is announced, not dropped from the header.
         let empty = Fake {
             origin: dxray_core::Origin::new("empty", "Empty"),
             roots: vec![PathBuf::from("/dxray-tui-empty-install")],
@@ -585,14 +559,7 @@ mod tests {
 
     #[test]
     fn a_catalogue_note_reaches_the_browser_under_its_launcher_s_name() {
-        // A note computed and never drawn is the failure this project names
-        // explicitly, and catalogue notes had exactly that shape here: the
-        // loop that forwards them could be deleted whole and every test still
-        // passed, because the launcher in these tests reported none.
-        //
-        // They are notes and not problems on purpose — a stale record for a
-        // game another cache supplied cost nobody anything — so this asserts
-        // the channel they arrive on as well as that they arrive.
+        // Catalogue notes arrive, and arrive as notes rather than problems.
         let launcher = Fake {
             origin: dxray_core::Origin::new("noted", "Noted"),
             roots: vec![PathBuf::from("/dxray-tui-noted")],
@@ -680,10 +647,8 @@ mod tests {
 
     #[test]
     fn every_launcher_is_scanned_and_its_messages_carry_its_own_name() {
-        // The loop is written once and run over the registry, so a launcher
-        // added to `launcher::all` is scanned without editing this file. The
-        // prefix comes from the launcher rather than a literal, which is what
-        // stops a third launcher inheriting a sentence about Steam.
+        // Every launcher in the registry is scanned, each prefix taken from its
+        // own launcher.
         let first = Fake {
             origin: dxray_core::Origin::new("first", "First"),
             roots: vec![PathBuf::from("/dxray-tui-first")],
@@ -741,9 +706,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_scan_stops_without_finishing_the_launcher_list() {
-        // `false` is the worker's instruction to stop silently, and it must be
-        // reachable from inside the uniform loop rather than only from the Steam
-        // half of the old one.
+        // `false` stops the worker from inside the shared loop.
         let launcher = Fake {
             origin: dxray_core::Origin::new("first", "First"),
             roots: vec![PathBuf::from("/dxray-tui-cancelled")],

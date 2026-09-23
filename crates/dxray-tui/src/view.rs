@@ -509,21 +509,9 @@ fn clip_text(text: &str, width: usize) -> String {
     clipped
 }
 
-/// The caveats that qualify the headline beside them, in the column that has
-/// room for a word and not a sentence.
-///
-/// Drawn *before* the headline, because this column is narrow and the end of it
-/// is what a narrow terminal drops. Between losing the tail of a verdict the
-/// detail pane repeats in full and losing the line that says the verdict may be
-/// about the wrong executable, the verdict is the cheaper thing to cut.
-///
-/// A verdict shown without them is a best executable presented as though the
-/// evidence chose it, and a library view is exactly where a caveat gets
-/// dropped. The words are `dxray --game`'s own — it says "tied with N others"
-/// and "could not be searched in full" — because a second vocabulary for one
-/// fact is the defect this project keeps finding in itself. The sentences
-/// behind both are in the detail pane, under `Note:`, so a marker here is never
-/// a mark with no explanation anywhere.
+/// The caveats beside the headline, in `dxray --game`'s words. Drawn first,
+/// since a narrow terminal drops the end; the detail pane explains each under
+/// `Note:`.
 fn caveats(entry: &Entry) -> String {
     let mut out = match entry.carries_evidence {
         Some(true) => " · static evidence found",
@@ -870,9 +858,8 @@ fn error_line(text: impl Into<String>) -> Line<'static> {
     Line::from(text.into()).style(Style::new().fg(ERROR).bg(BACKGROUND))
 }
 
-/// Adds the evidence read from the selected executable without interpreting it
-/// again. `dxray-core` owns the classification; the TUI only exposes every
-/// finding and the observation that supports it.
+/// Adds the evidence read from the selected executable, as `dxray-core`
+/// classified it.
 fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
     let Ok(verdict) = &ranked.verdict else {
         return;
@@ -896,9 +883,8 @@ fn render_verdict(lines: &mut Vec<Line<'static>>, ranked: &Ranked) {
     render_findings(lines, "Local overrides", &verdict.local_overrides);
 }
 
-/// Renders a complete verdict category, including empty categories. Keeping
-/// them visible means a missing category is not confused with one that was
-/// accidentally omitted by the detail view.
+/// Renders a verdict category, even an empty one, so an empty category is not
+/// mistaken for an omitted one.
 fn render_findings(lines: &mut Vec<Line<'static>>, category: &str, findings: &[Finding]) {
     lines.push(Line::from(format!("{category}:")));
     if findings.is_empty() {
@@ -1974,9 +1960,7 @@ mod tests {
 
     #[test]
     fn detail_prints_the_same_versioned_signal_line_the_cli_prints() {
-        // Two surfaces, one sentence. The defect this project has already fixed
-        // twice is one rule with two implementations that drift, and a version
-        // shown by `dxray --game` but not by the detail pane would be the third.
+        // The same version sentence as `dxray --game`.
         use dxray_core::{FileVersion, Signal, Source, Version, VersionInfo};
 
         let mut verdict = analyse(&Evidence {
@@ -2132,9 +2116,7 @@ mod tests {
         })));
         app.update(Msg::Resize(32, 12));
         app.update(Msg::Game(Box::new(entry)));
-        // At the 30-cell inner width, Ratatui renders this diagnostic in two
-        // rows. The former local approximation counted three because of the
-        // four spaces, so End selected a blank row after the content.
+        // Ratatui wraps this to two rows at width 30; End must land on the last.
         app.update(Msg::test_problem("aa    aaaaaaaaaaaaaaa aaaaaaaaaa FINAL"));
         app.update(Msg::Key(crate::Key::Tab));
         app.update(Msg::Key(crate::Key::Home));
@@ -2223,10 +2205,7 @@ mod tests {
 
     #[test]
     fn the_list_column_carries_the_caveats_that_qualify_the_verdict_beside_it() {
-        // Both are computed on the scanning thread and were drawn nowhere. A
-        // browser that shows "Direct3D 12" while silently dropping "this was a
-        // coin flip between two executables" is the one surface in the project
-        // where a caveat goes quiet.
+        // Both caveats are drawn.
         let mut app = App::new(24);
         let mut entry = ranked_entry(Ok(analyse(&Evidence::default())));
         entry.tie = Some(
@@ -2308,11 +2287,7 @@ mod tests {
 
     #[test]
     fn the_markers_are_drawn_in_the_order_they_qualify_the_headline() {
-        // The order is the claim `caveats` documents: `no evidence` first,
-        // because it qualifies the headline hardest, then the tie, then the
-        // partial walk. Every other assertion in this file asks whether a
-        // marker is on the screen, which three markers in any order satisfy —
-        // so this one asks where they are relative to each other.
+        // Order matters: `no evidence`, then the tie, then the partial walk.
         let mut app = App::new(24);
         let mut entry = Entry::build(
             Game {
@@ -2354,9 +2329,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_install_is_not_marked_as_carrying_no_evidence() {
-        // It was never asked. The headline already says the directory could not
-        // be read, and a second marker claiming nothing was observed would make
-        // an unanswered question look like an answer.
+        // Unread is not "nothing observed".
         let mut app = App::new(24);
         app.update(Msg::Game(Box::new(missing_install_entry(
             io::ErrorKind::NotFound,
@@ -2442,9 +2415,7 @@ mod tests {
 
     #[test]
     fn a_best_executable_with_nothing_arguing_for_it_says_so_in_the_cli_s_words() {
-        // The shape of a directory of leftover installers: something ranked
-        // first because something had to. A score with no reasons under it
-        // reads as truncated output instead of as the finding it is.
+        // A score with no reasons is a finding, not truncated output.
         let mut app = App::new(24);
         let mut entry = ranked_entry(Ok(analyse(&Evidence::default())));
         if let Best::Ranked(ranked) = &mut entry.best {

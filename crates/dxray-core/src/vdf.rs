@@ -1,42 +1,16 @@
 //! Valve's `KeyValues` text format. Pure: no paths, no filesystem.
 //!
-//! Steam keeps its install index and its per-game manifests in this format, so
-//! everything this crate can say about a real machine's library starts by
-//! reading it correctly. Three decisions below exist because the obvious
-//! implementation gets a real file wrong.
-//!
-//! **Order is part of the data.** A `HashMap` would be the natural choice and
-//! it would silently reorder `libraryfolders.vdf`, which numbers its entries
-//! and is read back by index. Objects here keep insertion order.
-//!
-//! **Lookups are case-insensitive.** Valve's own parser treats keys that way
-//! and Valve's own files rely on it: the root key of `libraryfolders.vdf` was
-//! spelled `LibraryFolders` for years and is spelled `libraryfolders` now. A
-//! case-sensitive `get` finds nothing on half the installs in the world and
-//! reports it as an empty library.
-//!
-//! **A broken file is an error, never a short answer.** A truncated `.acf`
-//! parsed leniently yields an object with no `installdir` in it, which reads
-//! exactly like a game that is not installed. Every failure below names what
-//! was expected and the line it was expected on.
+//! Objects keep insertion order, lookups ignore ASCII case (as Valve's own
+//! parser does), and a broken file is an error, never a short answer.
 
 #[cfg(test)]
 mod tests;
 
 use std::fmt;
 
-/// How deep nesting may go before it is treated as malformed.
-///
-/// Exactly this many nested blocks parse and one more is an error, the same
-/// boundary [`heroic`](crate::heroic)'s JSON reader draws with the same
-/// constant.
-///
-/// The number is arbitrary; the bound is not. Steam's own files nest four
-/// levels at the most, so 64 is more headroom than any real document needs.
-/// Without *some* cap, a file of nothing but open braces overflows the stack,
-/// and a stack overflow aborts the process — it is not an error a caller can
-/// catch, so one malformed file would kill a whole library scan instead of
-/// producing one bad record.
+/// How deep nesting may go: exactly this many blocks parse and one more is an
+/// error, as in [`heroic`](crate::heroic)'s JSON reader. The bound stops a file
+/// of open braces from overflowing the stack.
 const MAX_DEPTH: usize = 64;
 
 /// A parsed value: either a leaf string or a nested object.
@@ -68,11 +42,8 @@ impl Value {
     }
 }
 
-/// An ordered key-to-value map.
-///
-/// Duplicate keys are kept rather than merged, because the file said them twice
-/// and dropping one would make the parse unfaithful. [`Object::get`] answers
-/// with the first, which is what Valve's reader does.
+/// An ordered key-to-value map. Duplicate keys are kept; [`Object::get`]
+/// answers with the first, as Valve's reader does.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Object {
     entries: Vec<(String, Value)>,
@@ -80,10 +51,6 @@ pub struct Object {
 
 impl Object {
     /// The first value stored under `key`, compared without ASCII case.
-    ///
-    /// Case-insensitive because Valve's files are: see the module docs.
-    /// Non-ASCII keys compare exactly, which matches Valve and matters to
-    /// nobody, since every key in a Steam file is ASCII.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.entries
@@ -122,9 +89,7 @@ impl Object {
     }
 }
 
-/// Borrows one stored pair. A named function rather than a closure so that
-/// [`Object::iter`] and `IntoIterator for &Object` can share one concrete
-/// return type instead of the second one allocating a `Vec` to match the first.
+/// Borrows one stored pair; a named function so both iterators share one type.
 fn borrow_pair(entry: &(String, Value)) -> (&str, &Value) {
     (entry.0.as_str(), &entry.1)
 }
@@ -144,9 +109,6 @@ impl<'a> IntoIterator for &'a Object {
 }
 
 /// What went wrong, and exactly where.
-///
-/// The position is carried separately from the kind so a caller can report the
-/// file name beside it without having to re-parse the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub kind: ErrorKind,
@@ -183,22 +145,11 @@ pub enum ErrorKind {
     ExpectedKey,
     /// Nesting past `MAX_DEPTH`.
     TooDeep,
-    /// A `[$WIN32]`-style platform conditional.
-    ///
-    /// A real part of `KeyValues` that this parser does not implement, and
-    /// refuses rather than misreads. Left alone, the bracketed token would be
-    /// taken for the next key and everything after it would shift by one, which
-    /// is a file that parses cleanly and means something else. Erroring says
-    /// what happened; guessing does not. These do not appear in
-    /// `libraryfolders.vdf` or in an `appmanifest`, so reaching this is either a
-    /// file from elsewhere or a corrupt one.
+    /// A `[$WIN32]`-style platform conditional: not implemented, and refused
+    /// rather than misread as the next key.
     PlatformConditional,
-    /// A `#base` or `#include` directive.
-    ///
-    /// Also real, also unimplemented, and worse than the conditional if it were
-    /// waved through: the file it names holds keys that would have been part of
-    /// the document, so treating the directive as an ordinary pair leaves that
-    /// data missing with nothing to say it ever existed.
+    /// A `#base` or `#include` directive: not implemented, and refused, since
+    /// the keys it would pull in would silently be missing.
     Directive,
 }
 
@@ -249,30 +200,21 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Parses a `KeyValues` document into its root object.
-///
-/// The root is an object rather than a single pair because the format allows
-/// more than one top-level key and some Steam files use that. A leading UTF-8
-/// byte-order mark is skipped, CRLF is treated as whitespace, `//` runs to the
-/// end of the line, and both quoted and bare tokens are accepted.
+/// Parses a `KeyValues` document into its root object. A leading byte-order
+/// mark is skipped; `//` comments and both quoted and bare tokens are accepted.
 ///
 /// # Errors
 ///
-/// Returns the first structural problem found, with the line and column it was
-/// found on. Nothing partial is ever returned: see [`ErrorKind::UnclosedObject`].
+/// Returns the first structural problem, with its line and column. Nothing
+/// partial is returned.
 pub fn parse(input: &str) -> Result<Value, Error> {
     let mut parser = Parser::new(input);
     let root = parser.parse_body(0, 1)?;
     Ok(Value::Object(root))
 }
 
-/// Byte-oriented cursor over the input.
-///
-/// Scanning bytes is safe here because every delimiter the grammar has is
-/// ASCII, so a multi-byte character can only ever appear whole inside a token
-/// and is copied through without being inspected.
-/// A saved cursor position, used to report a fault against the token that
-/// caused it rather than against wherever the scan noticed it.
+/// A saved cursor position, so a fault is reported against the token that
+/// caused it.
 #[derive(Clone, Copy)]
 struct Mark {
     pos: usize,
@@ -280,6 +222,7 @@ struct Mark {
     line_start: usize,
 }
 
+/// Byte-oriented cursor over the input. Safe because every delimiter is ASCII.
 struct Parser<'a> {
     input: &'a str,
     bytes: &'a [u8],
@@ -291,9 +234,7 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        // A byte-order mark is not whitespace and not a key. Steam writes files
-        // without one, but editors and sync tools add them, and a parser that
-        // chokes on the first three bytes reports a healthy install as broken.
+        // Editors add byte-order marks; skipping one keeps a healthy file healthy.
         let start = if input.starts_with('\u{feff}') { 3 } else { 0 };
         Self {
             input,
@@ -304,10 +245,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Where the cursor is now, so a fault noticed later can still be reported
-    /// against the token that caused it. A key with no value is the case that
-    /// needs this: by the time it is detected the cursor has walked past the
-    /// key, and pointing at the following line helps nobody.
+    /// Where the cursor is now, so a fault noticed later is reported against
+    /// the token that caused it.
     fn mark(&self) -> Mark {
         Mark {
             pos: self.pos,
@@ -324,9 +263,7 @@ impl<'a> Parser<'a> {
         Error {
             kind,
             line: mark.line,
-            // Counted in characters: a byte column is off by the width of every
-            // non-ASCII character earlier on the line, which is exactly the
-            // case where a person needs the number to be right.
+            // Counted in characters, so the column matches what an editor shows.
             column: self.input[mark.line_start..mark.pos].chars().count() + 1,
             offset: mark.pos,
         }
@@ -361,12 +298,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Reads the pairs of one block.
-    ///
-    /// At `depth` 0 the block is the whole document and ends at end of input;
-    /// deeper it ends at the matching `}`. `opened_line` is where this block's
-    /// `{` was, and is only used to make a truncation message point at the
-    /// brace that is missing its partner rather than at the end of the file.
+    /// Reads the pairs of one block: the whole document at `depth` 0, up to the
+    /// matching `}` deeper. `opened_line` points a truncation at its brace.
     fn parse_body(&mut self, depth: usize, opened_line: usize) -> Result<Object, Error> {
         let mut object = Object::default();
         loop {
@@ -389,9 +322,7 @@ impl<'a> Parser<'a> {
                 // A block has to be named. Accepting an anonymous one would
                 // mean inventing a key, and every key here is load-bearing.
                 b'{' => return Err(self.error(ErrorKind::ExpectedKey)),
-                // Where the next key would be is exactly where a conditional
-                // trailing the previous value lands, so this is the position
-                // that catches `"key" "value" [$WIN32]`.
+                // Where a conditional trailing the previous value lands.
                 b'[' => return Err(self.error(ErrorKind::PlatformConditional)),
                 b'#' => return Err(self.error(ErrorKind::Directive)),
                 _ => {}
@@ -401,9 +332,7 @@ impl<'a> Parser<'a> {
             let key = self.read_token()?;
             self.skip_trivia();
             let value = match self.peek() {
-                // `"key" [$WIN32] "value"` also occurs. Caught here rather than
-                // read as the value, which would store the literal text
-                // `[$WIN32]` under the key and look like data.
+                // `"key" [$WIN32] "value"`, caught before it is stored as data.
                 Some(b'[') => return Err(self.error(ErrorKind::PlatformConditional)),
                 Some(b'{') => {
                     let line = self.line;
@@ -413,9 +342,7 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     Value::Object(self.parse_body(depth + 1, line)?)
                 }
-                // End of input, or the block closing, with the key's value
-                // still missing. Truncation lands here as often as it lands on
-                // an unclosed brace.
+                // Truncation lands here as often as on an unclosed brace.
                 None | Some(b'}') => return Err(self.error_at(ErrorKind::MissingValue, key_at)),
                 Some(_) => Value::String(self.read_token()?),
             };
@@ -452,15 +379,7 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     return Ok(out);
                 }
-                // A closing quote was forgotten. Reading on would fold the rest
-                // of the file into this one value and hand back a tree that
-                // parses cleanly and says something untrue.
-                //
-                // Reported against the quote that opened, not the newline that
-                // ended the line. They are always on the same line, but the
-                // column of the opening quote is the character a person has to
-                // put a cursor on; the column of the newline is the end of the
-                // line and tells them nothing.
+                // A forgotten closing quote, reported at the quote that opened it.
                 b'\n' => return Err(self.error_at(ErrorKind::NewlineInString, opened)),
                 b'\\' => {
                     out.push_str(&self.input[chunk..self.pos]);
@@ -473,22 +392,9 @@ impl<'a> Parser<'a> {
                         b'n' => '\n',
                         b't' => '\t',
                         b'r' => '\r',
-                        // An escape nobody defined. Keeping the backslash is
-                        // the safe reading: Windows paths reach these files as
-                        // `C:\\Games`, and a hand-edited `C:\Games` must come
-                        // back as a path rather than as `C:Games`.
-                        //
-                        // The escaped byte itself is left where it is instead
-                        // of being consumed. It may be the first byte of a
-                        // multi-byte character — `C:\Übisoft` is the very case
-                        // the paragraph above is about — and both halves of
-                        // consuming it are wrong: `char::from` on a byte at or
-                        // above 0x80 reinterprets a UTF-8 lead byte as a
-                        // Latin-1 codepoint, and stepping the cursor by two
-                        // leaves it inside the character, so the next copy out
-                        // of `self.input` panics on a char boundary. Stepping
-                        // by one lets the ordinary copy path carry the
-                        // character through whole.
+                        // An undefined escape keeps its backslash, so a
+                        // hand-edited `C:\Games` stays a path. The next byte is
+                        // not consumed: it may start a multi-byte character.
                         _ => {
                             out.push('\\');
                             self.pos += 1;
@@ -505,12 +411,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Reads an unquoted token, which ends at whitespace, a brace, a quote or
-    /// the start of a comment.
-    ///
-    /// Backslashes are literal here. Valve does not escape bare tokens, and a
-    /// bare Windows path in one of these files is written with single
-    /// separators.
+    /// Reads an unquoted token, up to whitespace, a brace, a quote or a comment.
+    /// Backslashes are literal here.
     fn read_bare(&mut self) -> String {
         let start = self.pos;
         while let Some(byte) = self.peek() {

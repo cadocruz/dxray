@@ -1,126 +1,23 @@
 //! What Proton's launcher script says it will do to a game's NVAPI. Pure: no
 //! paths, no filesystem.
 //!
-//! Proton withholds NVAPI from some games and hands it to others, and which is
-//! which is not configuration and not a list anybody publishes — it is written
-//! in the `proton` launcher script, a Python file inside every Proton install.
-//! Reading that script says what Proton will do to a game before the game has
-//! ever been run.
+//! The policy lives in the `proton` script. There is no Python parser here, so
+//! the reader is built to notice when it is out of its depth: the whole file is
+//! tokenised, only `if appid in [...]` and `ret.add("flag")` are understood,
+//! and any other mention of an NVAPI flag becomes a [`Refusal`].
 //!
-//! # There is no Python parser here, and that changes the risk
+//! Any block between the function body and a `ret.add` makes that site
+//! conditional, and is quoted rather than evaluated. The one exception is the
+//! `if "SteamAppId" in os.environ:` block that binds the application id.
 //!
-//! `ast.parse` fails loudly on a file it cannot handle. A hand-rolled scanner
-//! mis-scans quietly, which is much the worse failure for a tool whose whole
-//! claim is that it does not guess. So this reader is built to notice when it
-//! is out of its depth:
-//!
-//! * The lexer tokenises the **whole file** — strings, comments, bracket
-//!   continuations and all — and returns [`Error`] rather than a partial answer
-//!   if it meets something it cannot resolve. A docstring holding the text this
-//!   scanner looks for cannot fool it, because the docstring is one token.
-//! * Only two statement shapes are understood: `if appid in [...]` (or a tuple
-//!   or a set, or `appid == "..."`) and `ret.add("flag")`.
-//! * Every mention of an NVAPI flag **not** explained by one of those two
-//!   shapes becomes a [`Refusal`]. That is the net under the whole design: if
-//!   Proton moves the flag into a loop, or sets it through `ret.update(...)`,
-//!   or guards it with a compound test, the flag string is still in the file,
-//!   this reader still sees it, cannot account for it, and says so.
-//! * Every **block** between the function body and a policy site becomes a
-//!   [`Guard`]. Not the ones this reader can read — it can read none of them —
-//!   but every one of them, quoted back. See below.
-//!
-//! # Nothing between the list and the flag is ever waved through
-//!
-//! Proton 10.0 split the policy in two. One block sets the flag outright; the
-//! other holds the same kind of appid list and then:
-//!
-//! ```text
-//! try:
-//!     with open('/proc/modules') as f:
-//!         drivers = set([line.partition(' ')[0] for line in f.read().splitlines()])
-//!         if not drivers.intersection({'nvidia', 'nouveau', 'nova'}):
-//!             ret.add("disablenvapi")
-//! except OSError:
-//!     ret.add("disablenvapi")
-//! ```
-//!
-//! Read the sense of it: for those games NVAPI is disabled only when **no**
-//! NVIDIA driver is loaded. On the machines this tool is for, they keep it.
-//!
-//! An earlier version of this module treated that as *the* conditional shape
-//! and everything else as no condition at all, which is backwards. A guard this
-//! reader cannot state is a stronger reason to hedge than one it can quote,
-//! because there is nothing to hand the reader instead. So the rule is
-//! structural and has no list of shapes in it: **any block standing between the
-//! function body and a `ret.add` makes that site conditional**, and every such
-//! block is quoted verbatim with the literals it names pulled out. The
-//! `/proc/modules` case is not special. It is simply the one that happens to
-//! name four legible things.
-//!
-//! The single exception is the block that *binds* the application id —
-//! `if "SteamAppId" in os.environ:` with `appid = os.environ[...]` inside it,
-//! which wraps the whole policy in every release. It is not a condition on the
-//! policy; it is the condition under which there is an appid to ask about at
-//! all, so a caller asking about one has already assumed it. Nothing else is
-//! exempt, and if that binding ever changes shape every site becomes
-//! conditional and says so loudly — which is the safe direction to fail in.
-//!
-//! Conditions are never evaluated. Evaluating one would also make the answer
-//! depend on where `dxray` happens to be running rather than on what Proton
-//! will do to that game.
-//!
-//! # An empty answer is never a confident "no", and never a shrug either
-//!
-//! The reference implementation this replaces returns an empty set both when a
-//! game is absent from the policy and when the script could not be read, then
-//! reports both as "NVAPI is fine". That turns a release whose shape changed
-//! into "NVAPI is fine for every game, forever".
-//!
-//! The opposite mistake is just as bad and is easier to make: reporting a
-//! genuine true negative — Proton 7.0 has the function, has five real appid
-//! lists, and has no NVAPI policy in it — with the same sentence as a script
-//! whose policy was written in a shape this reader could not read. One is a
-//! finding and the other is a failure. [`Unknown`] separates them, and so does
-//! the exit code a caller draws from [`settled`].
-//!
-//! # The polarity flipped twice, so the flag name is not a constant
-//!
-//! Proton 5.0 and earlier have no such mechanism. Proton 6.3 through 8.0 spell
-//! it `enablenvapi` with the **opposite** meaning — NVAPI is off and an appid
-//! list turns it on, 136 games in 8.0. Proton 9.0 flips back to `disablenvapi`
-//! as an opt-out. A reader that knows only `disablenvapi`, finds none in an 8.0
-//! script and answers "not in the list, so NVAPI is on" gets every game on that
-//! release exactly backwards.
-//!
-//! This module supports both directions rather than only noticing the other
-//! one, because supporting it costs one enum and refusing it would throw away a
-//! true answer for 136 games. The direction is read off the flag the lists are
-//! written under — see [`Policy`] — and a script that lists appids under
-//! neither of those two flags has a policy whose *direction* cannot be told,
-//! which is not the same thing as having no policy. See
-//! [`Unknown::PolarityUnknown`].
-//!
-//! # What is believed rather than proven
-//!
-//! The direction is **inferred**, on the reasoning that no release spends a
-//! list enabling something already on. The line that actually decides it,
-//! `use_nvapi = ...`, is a Python expression this reader does not parse. Two
-//! things make the inference checkable rather than blind: every answer names
-//! the flag it was drawn from, and [`Reading::elsewhere`] records which flags
-//! the rest of the script names, so a build whose policy and whose environment
-//! switches disagree about the direction is refused instead of answered.
-//!
-//! Version numbers are not used anywhere here and must not be: `GE-Proton10-1`
-//! ships the old single-block shape under a version that suggests the new one.
-//! Only shapes are recognised.
-//!
-//! # The lists are only the default
+//! The direction flipped twice: 6.3 to 8.0 list the games that get NVAPI
+//! (`enablenvapi`), 9.0 onwards the games that do not (`disablenvapi`). It is
+//! read off the flag the lists use, never off a version number: `GE-Proton10-1`
+//! ships the old shape.
 //!
 //! [`decide`] describes the script's lists. A launch can override them:
-//! `check_environment` calls run afterwards and add or remove each flag, so
-//! `PROTON_FORCE_NVAPI=1` in a game's launch options changes the answer for
-//! that game. [`resolve`] applies a launch's [`Environment`] the way the script
-//! does.
+//! `check_environment` calls run afterwards and add or remove each flag.
+//! [`resolve`] applies a launch's [`Environment`] the way the script does.
 
 mod environment;
 #[cfg(test)]
@@ -133,10 +30,7 @@ pub use environment::{
 use std::fmt;
 use std::fmt::Write as _;
 
-/// The name of the function Proton keeps its per-game workarounds in.
-///
-/// Present from Proton 7.0 onwards. Absent from 6.3 and earlier, which is not a
-/// failure and not a corrupt file: those releases have no such function.
+/// The function Proton keeps its per-game workarounds in; absent before 7.0.
 const FUNCTION: &str = "default_compat_config";
 
 /// The local name Proton binds the application id to inside that function.
@@ -148,21 +42,12 @@ const FLAGS: &str = "ret";
 /// How wide a tab is taken to be when measuring indentation, matching `CPython`.
 const TAB: usize = 8;
 
-/// How deeply the walk will follow nested blocks before it stops.
-///
-/// The number is arbitrary; the bound is not. Proton nests four levels at the
-/// most. Without a cap, a file of nothing but ever-deeper blocks would recurse
-/// until the stack ran out, and a stack overflow aborts the process — it is not
-/// an error a caller can catch, so one hostile file would kill a whole library
-/// scan instead of producing one refusal.
+/// How deeply nested blocks are followed. Proton nests four levels at most;
+/// the bound stops a hostile file from overflowing the stack.
 const MAX_DEPTH: usize = 64;
 
-/// An application id no Proton script lists, used to ask about a build rather
-/// than about a game.
-///
-/// The empty string, which is not a decimal number and so cannot collide with a
-/// real entry. If some script ever did list `""`, the only consequence is that
-/// [`settled`] would report that build as settled, which it would be.
+/// An application id no script lists, used to ask about a build rather than a
+/// game. Not a decimal number, so it cannot collide with a real entry.
 const NO_GAME: &str = "";
 
 /// The NVAPI-related flags Proton's compat config knows.
@@ -204,11 +89,8 @@ impl fmt::Display for Flag {
     }
 }
 
-/// Which way round a script's NVAPI policy runs.
-///
-/// Inferred from the flag the lists are written under, not from the line that
-/// computes the default. See the module docs for why that inference is drawn
-/// and what it costs.
+/// Which way round a script's NVAPI policy runs, inferred from the flag its
+/// lists are written under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
     /// Every game gets NVAPI except the ones in the lists. Proton 9.0 onwards.
@@ -228,20 +110,12 @@ impl Policy {
     }
 }
 
-/// One block standing between the function body and a flag being set.
-///
-/// Quoted back rather than summarised, and never evaluated. This reader
-/// understands none of them — not the `/proc/modules` one either — so the only
-/// honest thing it can do is print the text and name the literals in it, and
-/// let whoever is reading apply it to their own machine.
+/// One block standing between the function body and a flag being set. Quoted
+/// back, never evaluated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Guard {
-    /// Whether it wraps the appid list itself, rather than sitting between that
-    /// list and the flag.
-    ///
-    /// An enclosing guard is quoted as its header alone, because its body is
-    /// the whole appid list and reprinting eight hundred application ids under
-    /// a caveat helps nobody.
+    /// Whether it wraps the appid list itself. Such a guard is quoted as its
+    /// header alone, since its body is the whole list.
     pub enclosing: bool,
     /// 1-based first physical line of the quoted text.
     pub first: usize,
@@ -249,11 +123,8 @@ pub struct Guard {
     pub last: usize,
     /// The text, verbatim, with the indentation all of it shares removed.
     pub source: Vec<String>,
-    /// The plain string literals it names, deduplicated and in order, with the
-    /// NVAPI flag names themselves left out.
-    ///
-    /// The nearest thing to "what it depends on" that can be had without
-    /// interpreting anything: the words come straight out of the file.
+    /// The plain string literals it names, deduplicated and in order, without
+    /// the NVAPI flag names.
     pub mentions: Vec<String>,
 }
 
@@ -283,10 +154,8 @@ impl Guard {
     }
 }
 
-/// Everything standing between an appid list and the flag it would set.
-///
-/// Outermost first. More than one is ordinary: a site can sit inside a guard
-/// this reader did not recognise *and* reach its flag through a further block.
+/// Everything standing between an appid list and the flag it would set,
+/// outermost first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Condition {
     pub guards: Vec<Guard>,
@@ -324,19 +193,13 @@ pub struct Site {
     pub line: usize,
     /// The application ids the list holds, as the script spells them.
     pub appids: Vec<String>,
-    /// What stands between the list and the flag, when anything does.
-    ///
-    /// `None` means nothing does: the block sets the flag outright for every id
-    /// in the list, and no block this reader could not read wraps it.
+    /// What stands between the list and the flag. `None`: the flag is set
+    /// outright for every id in the list.
     pub condition: Option<Condition>,
 }
 
-/// Something inside the policy that this reader met and would not guess at.
-///
-/// A refusal is not a parse failure: the rest of the scan still happened. What
-/// it means is that an answer drawn from an *absence* in this reading is not
-/// safe, because the appid being asked about could be in the part that was
-/// refused. [`decide`] enforces exactly that.
+/// Something inside the policy this reader would not guess at. The rest of the
+/// scan still happened, but an answer drawn from an absence is no longer safe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
     /// 1-based line the refusal is about.
@@ -347,12 +210,8 @@ pub struct Refusal {
 /// The shapes a refusal comes in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalKind {
-    /// An NVAPI flag is named somewhere that is not a `ret.add("flag")` inside
-    /// a recognised appid list.
-    ///
-    /// A flag set from a loop, set unconditionally for everything, or set
-    /// through `ret.update({...})` lands here rather than being read as an
-    /// empty policy.
+    /// An NVAPI flag named outside a `ret.add("flag")` in a recognised list:
+    /// set from a loop, for everything, or through `ret.update(...)`.
     Unaccounted,
     /// A recognised appid list that sets an NVAPI flag holds an entry that is
     /// not a plain string literal, so the list read out of it is short.
@@ -360,12 +219,8 @@ pub enum RefusalKind {
         /// How many entries could not be read.
         count: usize,
     },
-    /// The policy's direction and the rest of the script disagree.
-    ///
-    /// The lists are written under one flag and the script's environment
-    /// switches name only the other. Never seen on a real release, and exactly
-    /// what a change of direction would look like on the day it happens, so it
-    /// is refused instead of answered.
+    /// The lists are written under one flag while the rest of the script names
+    /// only the other: what a change of direction would look like.
     PolarityDisagrees {
         /// The flag the lists use.
         listed: Flag,
@@ -408,49 +263,25 @@ impl fmt::Display for Refusal {
     }
 }
 
-/// Everything one `proton` script was found to say about NVAPI, and everything
-/// about it that could not be determined.
-///
-/// The facts a caller needs in order to trust an answer are kept apart on
-/// purpose: [`Reading::function_line`] says the function was found,
-/// [`Reading::appid_lists`] says well-formed appid lists were read out of it,
-/// [`Reading::sites`] says some of them touch NVAPI, [`Reading::refusals`] says
-/// what was not understood, and [`Reading::elsewhere`] says what the rest of
-/// the script knows about NVAPI. They are not the same fact, and a set of
-/// appids alone reports none of them.
+/// Everything one `proton` script says about NVAPI, and what could not be
+/// determined.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reading {
     /// 1-based line of `default_compat_config`, when the script has one.
     pub function_line: Option<usize>,
-    /// How many `if appid in [...]` blocks were read, whatever flag they set.
-    ///
-    /// The evidence that the scan understood the file's shape. A script with
-    /// thirty of these and no NVAPI site is a build whose policy is absent or
-    /// elsewhere; a script with none is a file this reader did not understand,
-    /// and the two must not produce the same sentence.
+    /// How many `if appid in [...]` blocks were read, whatever flag they set:
+    /// the evidence that the scan understood the file's shape.
     pub appid_lists: usize,
     /// The NVAPI sites, in the order the file spells them.
     pub sites: Vec<Site>,
     /// What was met inside the function and not understood.
     pub refusals: Vec<Refusal>,
-    /// The NVAPI flags the script names outside the function, deduplicated and
-    /// in file order.
-    ///
-    /// Two jobs. It corroborates the direction the lists imply, and it is what
-    /// separates a build whose NVAPI is decided by an environment switch rather
-    /// than by which game it is — Proton 6.3 and 7.0 — from one that says
-    /// nothing about NVAPI anywhere.
+    /// The NVAPI flags named outside the function, deduplicated and in file
+    /// order. They corroborate the lists' direction, and show a build that
+    /// decides NVAPI by an environment switch rather than per game.
     pub elsewhere: Vec<Flag>,
-    /// How many string literals anywhere in the script hold the text `nvapi`,
-    /// in any spelling.
-    ///
-    /// A far wider net than [`Reading::elsewhere`], and it is wide on purpose.
-    /// It catches the DLL names and the environment variables as well as the
-    /// flags, which makes it useless for deciding anything — and exactly right
-    /// for one question: *is there any NVAPI machinery in this file at all?* A
-    /// script with no NVAPI site, no refusal and no flag this reader knows is a
-    /// true negative if this is zero and a build spelling its flags in some new
-    /// way if it is not.
+    /// How many string literals anywhere hold `nvapi`, in any spelling: a wide
+    /// net that tells a true negative from flags spelled some new way.
     pub nvapi_mentions: usize,
     /// The `check_environment` calls for NVAPI flags, in file order.
     pub switches: Vec<Switch>,
@@ -463,12 +294,8 @@ pub struct Reading {
 }
 
 impl Reading {
-    /// Which way round the policy runs, if it can be told.
-    ///
-    /// `None` when no list is written under `disablenvapi` or `enablenvapi` —
-    /// whether because the script has no NVAPI list at all or because its only
-    /// lists are `forcenvapi` — and also when it has both kinds, a shape no
-    /// release has had and one this reader will not pick a winner from.
+    /// Which way round the policy runs, if it can be told. `None` with no
+    /// `disablenvapi` or `enablenvapi` list, or with both.
     #[must_use]
     pub fn policy(&self) -> Option<Policy> {
         match (self.lists(Flag::Disable), self.lists(Flag::Enable)) {
@@ -495,10 +322,6 @@ impl Reading {
     }
 
     /// One sentence about how much of the script was understood.
-    ///
-    /// Reported beside every answer, because "this game is not in the list" is
-    /// worth one thing when thirty lists were read and nothing at all when the
-    /// function was never found.
     #[must_use]
     pub fn evidence(&self) -> String {
         let Some(line) = self.function_line else {
@@ -558,12 +381,8 @@ impl Reading {
     }
 }
 
-/// What the policy does to one application id.
-///
-/// More than the three states the reference implementation had, because the
-/// real releases have more than three cases in them.
-/// [`Decision::available`] collapses them back to the question most callers are
-/// actually asking, and loses exactly the distinctions it says it loses.
+/// What the policy does to one application id. [`Decision::available`]
+/// collapses it to yes, no or not settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// In a `disablenvapi` list with nothing between the list and the flag:
@@ -585,17 +404,11 @@ pub enum Decision {
         /// 1-based line of the list.
         line: usize,
     },
-    /// An allow-list policy was read and this id is not in it — so NVAPI is
-    /// **withheld**. The same silence that means "fine" on Proton 9.0 means the
-    /// opposite on Proton 8.0, which is why this is its own variant rather than
-    /// being folded into [`Decision::NotListedToDisable`].
+    /// An allow-list policy was read and this id is not in it, so NVAPI is
+    /// **withheld**: the opposite of the same silence on a deny-list build.
     NotListedToEnable,
-    /// Listed, and the flag is set only when something holds that this reader
-    /// will not evaluate.
-    ///
-    /// The condition is carried, not resolved. It is not a yes and not a no,
-    /// and it is not the same thing as not knowing: the script says what it
-    /// turns on, and that text is in here.
+    /// Listed, and the flag is set only under a condition this reader does not
+    /// evaluate. The condition's text is carried.
     Conditional {
         /// The flag the condition would set.
         flag: Flag,
@@ -604,14 +417,8 @@ pub enum Decision {
         /// Everything standing between the list and the flag.
         condition: Condition,
     },
-    /// The function was read in full, nothing in it was refused, and no appid
-    /// list in it touches NVAPI.
-    ///
-    /// A finding, not a failure, and the difference matters: Proton 7.0 really
-    /// is like this. Its NVAPI is decided by an environment switch rather than
-    /// by which game is being launched, so nothing about *this* game changes
-    /// what Proton does. [`Decision::available`] is still `None`, because what
-    /// the switch defaults to is not something this reader parses.
+    /// The function was read in full, nothing was refused, and no list touches
+    /// NVAPI: a finding, as in Proton 7.0, where an environment switch decides.
     NotGameSpecific {
         /// The NVAPI flag the rest of the script names, when it names one.
         /// `None` means the script mentions no NVAPI flag at all.
@@ -621,43 +428,24 @@ pub enum Decision {
     Unknown(Unknown),
 }
 
-/// Why an answer could not be given.
-///
-/// Every variant is a different failure with a different fix, and the point of
-/// having five of them is that none of them may be printed in place of
-/// [`Decision::NotGameSpecific`], which is not a failure at all.
+/// Why an answer could not be given. None of these may be reported as
+/// [`Decision::NotGameSpecific`], which is not a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unknown {
-    /// The script parsed and holds no `default_compat_config`.
-    ///
-    /// This is where a Proton 6.3 and a script truncated just above the
-    /// function both land, and there is no way to tell them apart from one
-    /// file. Neither is reported as a broken file and neither is reported as
-    /// "no games are affected": the answer is that the function is not there.
+    /// The script parsed and holds no `default_compat_config`: Proton 6.3, or a
+    /// script truncated above it. One file cannot tell them apart.
     NoFunction {
         /// Whether the script names an NVAPI flag anywhere else.
         mechanism: bool,
     },
-    /// NVAPI is set inside the function by shapes this reader does not model,
-    /// and no site was read at all, so whether there is a per-game policy
-    /// cannot be told.
-    ///
-    /// The variant that must never be confused with
-    /// [`Decision::NotGameSpecific`]. One says the file was read and there is
-    /// no policy; this one says the policy may be entirely inside the part that
-    /// was not read.
+    /// NVAPI is set inside the function only by shapes this reader does not
+    /// model, so the whole policy may be in the part that was not read.
     Unreadable {
         /// How many things were refused.
         refusals: usize,
     },
-    /// Appid lists that touch NVAPI were read, and none of them is written
-    /// under `disablenvapi` or `enablenvapi`.
-    ///
-    /// The direction of a policy is read off those two flags. A script with
-    /// only `forcenvapi` lists has a policy whose direction cannot be told,
-    /// which is emphatically not the same as having no policy — and saying "no
-    /// list touches NVAPI" about it would be false against the lists printed
-    /// beside it.
+    /// NVAPI lists were read, and none is written under `disablenvapi` or
+    /// `enablenvapi`, so the direction cannot be told.
     PolarityUnknown {
         /// The flag the lists that were found use.
         listed: Flag,
@@ -672,12 +460,8 @@ pub enum Unknown {
         /// How many things were refused.
         refusals: usize,
     },
-    /// No NVAPI site and nothing refused, but the script is full of `nvapi`
-    /// strings and names no flag this reader knows.
-    ///
-    /// What a release that renamed its flags would look like. Reported rather
-    /// than read as a true negative, because the wide net catching something is
-    /// the only evidence that the narrow one missed anything.
+    /// No NVAPI site and nothing refused, yet the script is full of `nvapi`
+    /// strings: what a release that renamed its flags would look like.
     UnknownSpelling {
         /// How many `nvapi` strings are in the script.
         mentions: usize,
@@ -685,15 +469,9 @@ pub enum Unknown {
 }
 
 impl Decision {
-    /// Whether Proton will offer this game NVAPI: `Some(true)`, `Some(false)`,
-    /// or `None` when it is not settled.
-    ///
-    /// A convenience, and a lossy one. [`Decision::Conditional`],
-    /// [`Decision::NotGameSpecific`] and [`Decision::Unknown`] all answer
-    /// `None` while meaning three very different things: a condition this crate
-    /// declines to evaluate, a build with no per-game policy, and an absence of
-    /// knowledge. A caller showing a person the result should render the
-    /// [`Decision`] itself, which says which.
+    /// Whether Proton offers this game NVAPI, or `None` when that is not
+    /// settled. Lossy: a condition, a build with no per-game policy and a
+    /// failure all answer `None`.
     #[must_use]
     pub fn available(&self) -> Option<bool> {
         match self {
@@ -705,11 +483,8 @@ impl Decision {
         }
     }
 
-    /// Whether the answer is that there is no answer.
-    ///
-    /// False for [`Decision::Conditional`], which *is* an answer — the script
-    /// says what it depends on and this carries that text. False too for
-    /// [`Decision::NotGameSpecific`], which is a finding about the build.
+    /// Whether the answer is that there is no answer. False for
+    /// [`Decision::Conditional`] and [`Decision::NotGameSpecific`].
     #[must_use]
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown(_))
@@ -844,9 +619,7 @@ pub fn decide(reading: &Reading, appid: &str) -> Decision {
             mechanism: !reading.elsewhere.is_empty(),
         });
     }
-    // Nothing was found *and* something was not understood. The policy may be
-    // entirely inside the part that was refused, so this is the one case that
-    // must never be reported as a build with no per-game policy.
+    // The policy may be entirely inside the part that was refused.
     if reading.sites.is_empty() && !reading.refusals.is_empty() {
         return Decision::Unknown(Unknown::Unreadable {
             refusals: reading.refusals.len(),
@@ -871,9 +644,7 @@ pub fn decide(reading: &Reading, appid: &str) -> Decision {
     };
 
     match reading.policy() {
-        // A `forcenvapi` beats a `disablenvapi` for the same id, because the
-        // script's own test is `"disablenvapi" not in config or "forcenvapi" in
-        // config`. Checked first for that reason and no other.
+        // `forcenvapi` beats `disablenvapi`, as the script's own test does.
         Some(Policy::DenyList) => flat(Flag::Force)
             .map(|line| Decision::ListedToForce { line })
             .or_else(|| flat(Flag::Disable).map(|line| Decision::ListedToDisable { line }))
@@ -889,12 +660,8 @@ pub fn decide(reading: &Reading, appid: &str) -> Decision {
         None if reading.lists(Flag::Disable) && reading.lists(Flag::Enable) => {
             Decision::Unknown(Unknown::Contradictory)
         }
-        // NVAPI lists were read, and none of them says which way round the
-        // policy runs. A game named in one of them still has its answer — the
-        // script's own expression makes `forcenvapi` sufficient on its own —
-        // but a game outside them does not, because the direction is exactly
-        // what is missing. Saying "no list touches NVAPI" here would be false
-        // against the lists this same reading is about to print.
+        // Lists were read and none gives the direction: a listed game still
+        // has its answer, an unlisted one does not.
         None if !reading.sites.is_empty() => {
             let listed = reading.sites[0].flag;
             flat(listed)
@@ -905,9 +672,8 @@ pub fn decide(reading: &Reading, appid: &str) -> Decision {
                     appids: reading.listed(listed),
                 }))
         }
-        // No NVAPI site, and nothing refused. Either a genuine true negative or
-        // a build whose flags are spelled in some way this reader has never
-        // seen, and the wide `nvapi` net is what tells those apart.
+        // No site and nothing refused: a true negative, unless the wide net
+        // caught flags spelled some other way.
         None if reading.elsewhere.is_empty() && reading.nvapi_mentions > 0 => {
             Decision::Unknown(Unknown::UnknownSpelling {
                 mentions: reading.nvapi_mentions,
@@ -919,23 +685,15 @@ pub fn decide(reading: &Reading, appid: &str) -> Decision {
     }
 }
 
-/// What this build does to a game it says nothing about in particular.
-///
-/// Answering the question "was this script understood well enough to answer
-/// with" by asking [`decide`] about a game no script lists, so that a run which
-/// names no application id and a run which names one cannot disagree about
-/// whether the build was read.
+/// What this build does to a game it says nothing about: whether the script
+/// was understood well enough to answer with.
 #[must_use]
 pub fn overall(reading: &Reading) -> Decision {
     decide(reading, NO_GAME)
 }
 
 /// Whether the build was read well enough for its answers to be worth having.
-///
-/// False when the function was not found, when something was refused, or when
-/// the direction of the policy could not be told. **True** for a build with no
-/// per-game NVAPI policy at all, which is a finding rather than a failure — see
-/// [`Decision::NotGameSpecific`].
+/// True for a build with no per-game policy, which is a finding.
 #[must_use]
 pub fn settled(reading: &Reading) -> bool {
     !overall(reading).is_unknown()
@@ -950,11 +708,8 @@ fn find<'a>(reading: &'a Reading, flag: Flag, appid: &str, conditional: bool) ->
     })
 }
 
-/// What went wrong while reading the script, and where.
-///
-/// Every variant means the same thing to a caller — *this file was not
-/// understood, so believe nothing about it* — and they are kept apart so the
-/// message can say which shape defeated the reader rather than shrugging.
+/// Why the script was not understood, and where. Nothing about the file is
+/// established when this is returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub kind: ErrorKind,
@@ -972,19 +727,11 @@ pub enum ErrorKind {
     UnmatchedBracket,
     /// The file ended inside a bracket.
     UnclosedBracket,
-    /// A line inside the function is indented with a tab.
-    ///
-    /// Refused rather than guessed at. `CPython` rejects tabs mixed with spaces
-    /// and Proton has only ever used spaces, so meeting one means a file that
-    /// is not a Proton script or one that has been through something that
-    /// rewrote it — and the block structure this reader depends on is exactly
-    /// what a wrong tab width changes silently.
+    /// A line inside the function is indented with a tab. Proton uses spaces,
+    /// and a wrong tab width would move block boundaries silently.
     TabIndent,
-    /// The script defines the function more than once.
-    ///
-    /// Python would keep the last one. This reader will not assume which one
-    /// Proton means, because the answer would be a policy read out of a
-    /// function that never runs.
+    /// The script defines the function more than once. Python keeps the last;
+    /// this reader will not guess which one Proton means.
     DuplicateFunction {
         /// 1-based line of the first definition.
         first: usize,
@@ -1020,18 +767,13 @@ impl std::error::Error for Error {}
 
 /// Reads one `proton` script's NVAPI policy out of its text.
 ///
-/// A script with no `default_compat_config` is **not** an error: it comes back
-/// as a [`Reading`] with no function line, which [`decide`] turns into
-/// [`Unknown::NoFunction`]. Proton 6.3 and earlier genuinely have no such
-/// function, and a script truncated just above it is indistinguishable from
-/// one. Reporting either as a broken file would be as wrong as reporting it as
-/// an empty policy, so neither happens.
+/// A script with no `default_compat_config` is not an error: it comes back
+/// with no function line, which [`decide`] reports as [`Unknown::NoFunction`].
 ///
 /// # Errors
 ///
-/// Returns [`Error`] when the file cannot be tokenised, or when it holds two
-/// definitions of the function. Nothing partial comes back: if this returns an
-/// error, nothing at all about the file has been established.
+/// Returns [`Error`] when the file cannot be tokenised, or when it defines the
+/// function twice.
 pub fn scan(script: &str) -> Result<Reading, Error> {
     let lines = lex(script)?;
     let raw: Vec<&str> = script.lines().collect();
@@ -1058,10 +800,8 @@ pub fn scan(script: &str) -> Result<Reading, Error> {
         None => 0..0,
     };
 
-    // Everything the script says about NVAPI that is not inside the function.
-    // Gathered even when there is no function, because that is the only thing
-    // separating a build with no mechanism from one whose mechanism is real and
-    // is not a list of games.
+    // NVAPI flags outside the function, gathered even without one: they tell a
+    // build with no mechanism from one whose mechanism is not a list of games.
     for (i, line) in lines.iter().enumerate() {
         reading.nvapi_mentions += nvapi_strings(&line.tokens);
         if body.contains(&i) || Some(i) == header {
@@ -1075,8 +815,7 @@ pub fn scan(script: &str) -> Result<Reading, Error> {
     }
 
     let body = &lines[body];
-    // Checked over the whole body before anything is read out of it, because a
-    // block boundary computed from a tab of the wrong width is wrong silently.
+    // Checked first: a tab of the wrong width moves block boundaries silently.
     if let Some(tabbed) = body.iter().find(|line| line.tabbed) {
         return Err(Error {
             kind: ErrorKind::TabIndent,
@@ -1089,13 +828,8 @@ pub fn scan(script: &str) -> Result<Reading, Error> {
     Ok(reading)
 }
 
-/// Records a refusal when the lists and the rest of the script disagree about
-/// which way round the policy runs.
-///
-/// Only when the rest of the script does not mention the lists' flag *at all*
-/// and does mention the other one. A build that names both — every release
-/// since 9.0 names `disablenvapi` and `forcenvapi` together — says nothing
-/// about direction and is left alone.
+/// Records a refusal when the rest of the script names only the flag opposite
+/// to the lists'. A build naming both says nothing about direction.
 fn check_polarity(reading: &mut Reading) {
     let Some(policy) = reading.policy() else {
         return;
@@ -1147,15 +881,8 @@ fn function_line(lines: &[Logical]) -> Result<Option<usize>, Error> {
 }
 
 /// Walks a block, consuming each recognised appid list whole and descending
-/// through everything else with the tests it passed under recorded.
-///
-/// `guards` is the stack of blocks between the function body and here that this
-/// reader could not state. It is what makes a wrapped policy site conditional
-/// instead of invisible: an `if appid in [...]` block that sets a flag outright
-/// is only *unconditional* if nothing on that stack stands over it.
-///
-/// Every line that is not part of a recognised appid list is still inspected
-/// for NVAPI flag names, and each one found there becomes a refusal.
+/// through everything else. `guards` is the stack of blocks between the
+/// function body and here; a flag named outside a list becomes a refusal.
 fn walk(body: &[Logical], raw: &[&str], guards: &mut Vec<Guard>, depth: usize, out: &mut Reading) {
     let mut i = 0;
     while i < body.len() {
@@ -1173,9 +900,7 @@ fn walk(body: &[Logical], raw: &[&str], guards: &mut Vec<Guard>, depth: usize, o
             continue;
         }
 
-        // Any flag named by a statement that is not a recognised list — whether
-        // that statement opens a block or not — is a flag this reader cannot
-        // account for.
+        // A flag named by anything but a recognised list cannot be accounted for.
         if !flags_named(&line.tokens).is_empty() {
             out.refusals.push(Refusal {
                 line: line.line,
@@ -1192,10 +917,7 @@ fn walk(body: &[Logical], raw: &[&str], guards: &mut Vec<Guard>, depth: usize, o
                 i = end;
                 continue;
             }
-            // The block that binds the application id is not a condition on the
-            // policy — it is the condition under which there is an application
-            // id at all, which a caller asking about one has already assumed.
-            // Nothing else is exempt. See the module docs.
+            // The block binding the application id is not a condition on the policy.
             let transparent = binds_appid(line, inner);
             if !transparent {
                 guards.push(enclosing_guard(line, raw));
@@ -1219,9 +941,8 @@ fn block(
     out: &mut Reading,
 ) {
     let inline = &header.tokens[test.colon + 1..];
-    // A statement on the same line as the `if` is the block's whole body, and
-    // Python forbids an indented block after one. If both somehow appear, the
-    // indented part is treated as deeper, which is the cautious reading.
+    // A statement on the `if` line is the whole body; an indented block after
+    // it is treated as deeper, the cautious reading.
     let top = if inline.is_empty() {
         body.first().map(|line| line.indent)
     } else {
@@ -1249,10 +970,7 @@ fn block(
 
     let mut added = false;
     for flag in FLAGS_KNOWN {
-        // A flag set outright is still conditional when a block this reader
-        // could not state wraps the list. That wrapper is invisible in the
-        // block's own body, which is exactly why it is carried down here rather
-        // than looked for from here.
+        // A flag set outright is still conditional under a guard wrapping the list.
         let condition = if outright.contains(&flag) {
             (!guards.is_empty()).then(|| Condition {
                 guards: guards.to_vec(),
@@ -1279,9 +997,7 @@ fn block(
             kind: RefusalKind::Unaccounted,
         });
     }
-    // Only worth saying when this block is one of the NVAPI ones. Half the
-    // blocks in a Proton script set flags this module has no opinion about, and
-    // a short list in one of those hides nothing.
+    // Only NVAPI blocks: a short list in any other block hides nothing.
     if added && test.opaque > 0 {
         out.refusals.push(Refusal {
             line: header.line,
@@ -1291,10 +1007,6 @@ fn block(
 }
 
 /// A block that wraps an appid list, quoted as its header alone.
-///
-/// The header and not the body, because the body is the list — quoting eight
-/// hundred application ids under a caveat helps nobody, and the test is the
-/// part a reader has to weigh.
 fn enclosing_guard(header: &Logical, raw: &[&str]) -> Guard {
     Guard {
         enclosing: true,
@@ -1318,10 +1030,7 @@ fn inner_guard(body: &[Logical], raw: &[&str]) -> Guard {
     }
 }
 
-/// Physical lines `first` to `last`, with the indentation they share removed.
-///
-/// Stripped because the margin is an artefact of where the block sits in the
-/// file, and keeping it pushes every quoted line off the right of a report.
+/// Physical lines `first` to `last`, with their shared indentation removed.
 fn quote(raw: &[&str], first: usize, last: usize) -> Vec<String> {
     let source: Vec<&str> = raw
         .iter()
@@ -1359,14 +1068,9 @@ fn literals(lines: &[Logical]) -> Vec<String> {
     out
 }
 
-/// Whether a block exists only to bind the application id.
-///
-/// `if "SteamAppId" in os.environ:` with an `appid = ...` at the top of its
-/// body, which is how every release from 7.0 onwards wraps its whole policy —
-/// twice, once for `SteamAppId` and once for `STEAM_COMPAT_APP_ID`. Recognised
-/// so that it does not make every site in every script conditional; nothing
-/// else is, so if this shape ever changes the answer degrades loudly to "all of
-/// it is conditional, here is the test" rather than quietly to a wrong yes.
+/// Whether a block exists only to bind the application id:
+/// `if "SteamAppId" in os.environ:` with `appid = ...` at the top of its body.
+/// If that shape changes, every site degrades to conditional.
 fn binds_appid(header: &Logical, body: &[Logical]) -> bool {
     let is_environ_test = matches!(
         header.tokens.as_slice(),
@@ -1388,11 +1092,7 @@ fn binds_appid(header: &Logical, body: &[Logical]) -> bool {
         .any(|line| Some(line.indent) == top && assigns_appid(&line.tokens))
 }
 
-/// Whether a statement binds `appid` to something.
-///
-/// Any right-hand side. What matters is that the name the lists compare against
-/// is set here, not how — a release that switched to `os.environ.get(...)` is
-/// still binding it, and refusing over that would be pedantry with a cost.
+/// Whether a statement binds `appid`, from any right-hand side.
 fn assigns_appid(tokens: &[Token]) -> bool {
     matches!(
         tokens,
@@ -1401,13 +1101,8 @@ fn assigns_appid(tokens: &[Token]) -> bool {
     )
 }
 
-/// The NVAPI flags a line names in a string literal.
-///
-/// Matching the known names exactly — rather than anything containing `nvapi` —
-/// keeps `"wine/nvapi/nvapi64.dll"` and the `dlloverrides` keys out of the
-/// count, which would otherwise make every release look like it had a dozen
-/// unmodelled mechanisms. The wide net lives in [`nvapi_strings`] and is used
-/// for a different question.
+/// The NVAPI flags a line names in a string literal, matched exactly so DLL
+/// paths and `dlloverrides` keys do not count.
 fn flags_named(tokens: &[Token]) -> Vec<Flag> {
     let mut out = Vec::new();
     for token in tokens {
@@ -1421,11 +1116,7 @@ fn flags_named(tokens: &[Token]) -> Vec<Flag> {
     out
 }
 
-/// How many string literals on a line mention `nvapi` in any spelling.
-///
-/// The wide net. Deliberately catches DLL paths and environment variable names
-/// as well as flags, because the only question it answers is whether the script
-/// has any NVAPI machinery in it at all.
+/// How many string literals on a line mention `nvapi`, in any spelling.
 fn nvapi_strings(tokens: &[Token]) -> usize {
     tokens
         .iter()
@@ -1446,13 +1137,8 @@ struct Test {
     colon: usize,
 }
 
-/// Matches `if appid in [...]`, `if appid in (...)`, `if appid in {...}` and
-/// `if appid == "..."`, and nothing else.
-///
-/// `elif` is deliberately not matched: its meaning depends on every test above
-/// it in the chain, and a reader that treated it as an `if` would report a list
-/// as unconditional when it is not. No release has set an NVAPI flag from one,
-/// and if one starts, the flag name still lands in [`walk`] as a refusal.
+/// Matches `if appid in [...]`, `(...)`, `{...}` and `if appid == "..."`, and
+/// nothing else. `elif` is left out: its meaning depends on the tests above it.
 fn match_appid_test(tokens: &[Token]) -> Option<Test> {
     match tokens.first()? {
         Token::Name(keyword) if keyword == "if" => {}
@@ -1584,14 +1270,10 @@ enum Token {
     Name(String),
     /// An unprefixed string literal with no escape in it, and its value.
     Text(String),
-    /// A string literal whose value this reader will not claim to know: it
-    /// carries a prefix (`f`, `r`, `b`) or an escape. Kept as a token rather
-    /// than dropped, so an entry made of one still counts as an entry that
-    /// could not be read.
+    /// A string literal with a prefix (`f`, `r`, `b`) or an escape, whose value
+    /// is not claimed.
     Opaque,
-    /// A number. The value is never needed: Proton spells every application id
-    /// as a string, and a bare number where one is expected is an entry this
-    /// reader refuses rather than reads.
+    /// A number. Application ids are strings, so its value is never needed.
     Number,
     /// One punctuation character.
     Punct(char),
@@ -1614,31 +1296,21 @@ fn is_string_prefix(name: &str) -> bool {
             .all(|b| matches!(b.to_ascii_lowercase(), b'r' | b'b' | b'u' | b'f'))
 }
 
-/// Turns the whole script into logical lines.
-///
-/// The whole script, not just the interesting part: a triple-quoted string
-/// anywhere above the function can hold any text at all, and a scanner that
-/// started reading in the middle would take that text for code.
+/// Turns the whole script into logical lines. The whole of it: a triple-quoted
+/// string above the function could otherwise be taken for code.
 fn lex(script: &str) -> Result<Vec<Logical>, Error> {
     Lexer::new(script).run()
 }
 
-/// Byte-oriented cursor over the script.
-///
-/// Scanning bytes is safe because every delimiter Python's grammar has is
-/// ASCII, so a multi-byte character can only appear whole inside a token and is
-/// copied through without being inspected.
+/// Byte-oriented cursor. Safe because every Python delimiter is ASCII.
 struct Lexer<'a> {
     script: &'a str,
     bytes: &'a [u8],
     at: usize,
     line: usize,
-    /// How many brackets are open. Non-zero means a newline joins lines rather
-    /// than ending a statement, which is how every appid list in a Proton
-    /// script is written.
+    /// Open brackets. Non-zero means a newline joins lines.
     depth: usize,
-    /// Where the outermost open bracket was, so an unclosed one is reported
-    /// against the bracket rather than against the end of the file.
+    /// Where the outermost open bracket was, for the unclosed-bracket error.
     open_line: usize,
     /// Whether the cursor is still in the indentation of a line.
     measuring: bool,
@@ -1704,8 +1376,7 @@ impl<'a> Lexer<'a> {
                 self.indent = 0;
                 self.tabbed = false;
             }
-            // A comment-only line. Skipped whole, and its indentation is not a
-            // block boundary — Python ignores it too.
+            // A comment-only line: skipped, and not a block boundary.
             b'#' => {
                 self.at = to_end_of_line(self.bytes, self.at);
                 return;
@@ -1835,21 +1506,11 @@ fn to_end_of_line(bytes: &[u8], mut at: usize) -> usize {
 }
 
 /// Reads one string literal, returning its token, the byte after it, and the
-/// line the reader ended on.
+/// line the reader ended on. `at` is the opening quote; `prefixed` makes the
+/// value opaque, since an `f`, `r` or `b` string's value is not its body.
 ///
-/// `at` is the opening quote: both callers have already seen one there, the
-/// prefixed form because [`Lexer::name`] steps over the prefix first. Checked
-/// rather than assumed — this was a forward scan with no bound if there was
-/// none.
-///
-/// `prefixed` makes the value opaque whatever the body says, because the value
-/// of an `f`, `r` or `b` string is not its body.
-///
-/// **A known limit.** An f-string that nests the *same* quote character inside
-/// its braces — legal only since Python 3.12 — ends early here. Nothing in any
-/// Proton release uses one, and the damage is bounded: the tokens after it stop
-/// matching the two shapes this reader knows, so the outcome is a refusal or a
-/// bracket error rather than a policy read out of nonsense.
+/// An f-string nesting its own quote character (Python 3.12+) ends early. No
+/// Proton release uses one, and the result is a refusal, not a wrong policy.
 fn read_string(
     script: &str,
     at: usize,

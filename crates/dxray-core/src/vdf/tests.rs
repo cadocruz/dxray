@@ -1,8 +1,5 @@
-//! Every case here is drawn from a shape that occurs in a real Steam
-//! directory, or from a shape that a corrupt one takes. Nothing was validated
-//! against a live install — there is none on the machine this was written on —
-//! so each test says which file the shape comes from and what reading it wrong
-//! would cost.
+//! Shapes from real Steam files, or from corrupt ones; each test says what
+//! reading it wrong would cost.
 
 use super::{Error, ErrorKind, Value, parse};
 
@@ -25,9 +22,7 @@ fn error(input: &str) -> Error {
 
 #[test]
 fn a_nested_document_keeps_the_order_its_keys_were_written_in() {
-    // `libraryfolders.vdf` numbers its entries and callers read them back in
-    // order. A HashMap would reorder them on every run, which turns a stable
-    // report into one that is different each time it is asked.
+    // Entries keep file order, so reports are stable.
     let object = root(
         r#"
         "libraryfolders"
@@ -49,10 +44,7 @@ fn a_nested_document_keeps_the_order_its_keys_were_written_in() {
 
 #[test]
 fn keys_are_matched_without_regard_to_case() {
-    // Not a nicety. Steam spelled the root of `libraryfolders.vdf`
-    // `LibraryFolders` for years and spells it `libraryfolders` now, and a
-    // case-sensitive lookup finds nothing on an older install and reports it
-    // as a machine with no games.
+    // Keys match without case: older installs spell `LibraryFolders`.
     let object = root(r#" "LibraryFolders" { "TimeNextStatsReport" "0" } "#);
 
     assert!(
@@ -70,9 +62,7 @@ fn keys_are_matched_without_regard_to_case() {
 
 #[test]
 fn a_utf8_byte_order_mark_is_not_part_of_the_first_key() {
-    // Steam does not write one, but editors and file-sync tools add them. A
-    // parser that folds the mark into the key stops matching `libraryfolders`
-    // and reports an install it can read perfectly as unreadable.
+    // A BOM added by an editor or sync tool is skipped.
     let object = root("\u{feff}\"libraryfolders\"\n{\n\"0\" \"/one\"\n}\n");
 
     assert_eq!(
@@ -86,9 +76,7 @@ fn a_utf8_byte_order_mark_is_not_part_of_the_first_key() {
 
 #[test]
 fn crlf_line_endings_parse_the_same_as_lf() {
-    // Steam on Windows writes CRLF, and these files are read from `/mnt/c` as
-    // often as from a Linux prefix. A stray carriage return glued to a value
-    // would break every path comparison downstream.
+    // CRLF, from Steam on Windows read through `/mnt/c`.
     let object = root("\"AppState\"\r\n{\r\n\t\"appid\"\t\t\"570\"\r\n}\r\n");
 
     assert_eq!(
@@ -102,9 +90,7 @@ fn crlf_line_endings_parse_the_same_as_lf() {
 
 #[test]
 fn an_escaped_quote_and_an_escaped_backslash_come_back_as_one_character_each() {
-    // Windows library paths arrive as `C:\\SteamLibrary` and must come back as
-    // `C:\SteamLibrary`; game names contain quotation marks often enough that
-    // Valve escapes them. Getting either wrong corrupts a path or a title.
+    // Escaped backslashes and quotes, from Windows paths and titles.
     let object = root(r#" "path" "C:\\Steam\\Library"  "name" "The \"Best\" Game" "#);
 
     assert_eq!(object.get_str("path"), Some(r"C:\Steam\Library"));
@@ -136,9 +122,7 @@ fn tokens_that_touch_with_no_whitespace_between_them_still_separate() {
 
 #[test]
 fn an_escape_nobody_defined_keeps_its_backslash() {
-    // A hand-edited file with `C:\Games` rather than `C:\\Games` is wrong, but
-    // dropping the backslash turns it into `C:Games`, which is a different
-    // directory. Keeping it leaves a path that still resolves.
+    // An undefined escape keeps its backslash, so the path still resolves.
     let object = root(r#" "path" "C:\Games\Steam" "#);
 
     assert_eq!(
@@ -150,13 +134,7 @@ fn an_escape_nobody_defined_keeps_its_backslash() {
 
 #[test]
 fn an_undefined_escape_before_a_multi_byte_character_keeps_the_character_whole() {
-    // The same hand-edited path as above with an accent in it, which is the
-    // case that used to abort the process. The escaped byte was consumed as if
-    // it were one character: `char::from` read the lead byte of `Ü` as the
-    // Latin-1 codepoint 0xC3, and the cursor stepped two bytes into the middle
-    // of a two-byte character, so the next copy out of the input panicked on a
-    // char boundary. A library scan died on one file with a European drive
-    // label in it.
+    // The same with non-ASCII after the backslash, which used to panic.
     let object =
         root("\"a\" \"D:\\Übergame\"  \"b\" \"\\大神\"  \"c\" \"\\🎮 Game\"  \"d\" \"\\é\"");
 
@@ -172,11 +150,8 @@ fn an_undefined_escape_before_a_multi_byte_character_keeps_the_character_whole()
 
 #[test]
 fn a_backslash_at_the_end_of_a_line_is_still_an_unterminated_string() {
-    // An undefined escape no longer swallows the byte after it, so a backslash
-    // sitting before the newline leaves the newline to be found. That is the
-    // honest reading: the string has no closing quote on its line, and folding
-    // the next line into the value is exactly what `NewlineInString` exists to
-    // refuse.
+    // The newline after a backslash still ends the line, so the unclosed string
+    // is refused.
     let err = error("\"path\" \"C:\\\n\"next\" \"value\"");
 
     assert_eq!(err.kind, ErrorKind::NewlineInString);
@@ -184,9 +159,7 @@ fn a_backslash_at_the_end_of_a_line_is_still_an_unterminated_string() {
 
 #[test]
 fn a_line_comment_is_not_data() {
-    // Hand-edited `libraryfolders.vdf` files comment out a drive that is
-    // currently unplugged. Reading the comment as an entry would send the
-    // scanner at a path that is not there.
+    // Commented-out entries are skipped.
     let object = root(
         r#"
         // this whole line is a note
@@ -204,9 +177,7 @@ fn a_line_comment_is_not_data() {
 
 #[test]
 fn a_double_slash_inside_a_quoted_string_is_a_path_and_not_a_comment() {
-    // Linux paths contain `//` after a careless join, and a URL appears in
-    // some manifests. Stripping from the first `//` regardless of quoting
-    // would truncate the value in silence.
+    // `//` inside a quoted value is not a comment.
     let object = root(r#" "path" "/home//user/.steam" "#);
 
     assert_eq!(object.get_str("path"), Some("/home//user/.steam"));
@@ -225,9 +196,7 @@ fn unquoted_tokens_are_accepted_on_both_sides_of_a_pair() {
 
 #[test]
 fn a_truncated_file_is_an_error_and_names_the_brace_that_was_left_open() {
-    // The case this parser exists for. A lenient reader returns an `AppState`
-    // with no `installdir` in it, and that is indistinguishable from a game
-    // that is not installed — a wrong answer wearing a valid one's clothes.
+    // A truncated manifest is an error, not a game with no `installdir`.
     let error = error("\"AppState\"\n{\n\t\"appid\"\t\"570\"\n\t\"name\"\t\"Dota");
 
     assert!(
@@ -272,14 +241,8 @@ fn a_missing_closing_quote_does_not_swallow_the_rest_of_the_file() {
 
 #[test]
 fn an_unterminated_string_at_the_end_of_input_names_the_line_the_quote_opened_on() {
-    // The truncated-file case. Pointing at the end of the file says only that
-    // the file ended, which the reader can already see; the line the quote
-    // opened on is the one they have to go and look at.
-    //
-    // Refusing a newline inside a quoted string is what makes the two the same
-    // line here — a string can never run past the line it started on. The
-    // column is where the difference shows: the opening quote, not the last
-    // byte of the file.
+    // The error points at the unclosed string's opening quote, not the end of
+    // the file.
     let error = error("\"AppState\"\n{\n\t\"appid\"\t\"570\"\n\t\"name\"\t\"Dota 2");
 
     assert_eq!(error.kind, ErrorKind::UnclosedString);
@@ -292,11 +255,7 @@ fn an_unterminated_string_at_the_end_of_input_names_the_line_the_quote_opened_on
 
 #[test]
 fn a_platform_conditional_is_refused_rather_than_read_as_the_next_key() {
-    // `[$WIN32]` is a real part of KeyValues that this parser does not
-    // implement. Left alone it would be taken for the next key, `"b"` would
-    // become its value, and every pair after that would shift by one — a file
-    // that parses cleanly and means something other than what it says. The
-    // whole point of refusing is that shifting silently is not an option.
+    // A `[$WIN32]` conditional is refused rather than shifting every pair.
     let after_a_value = error("\"a\" \"1\" [$WIN32]\n\"b\" \"2\"\n");
     assert_eq!(after_a_value.kind, ErrorKind::PlatformConditional);
     assert_eq!(after_a_value.line, 1, "where the bracket is");
@@ -308,9 +267,7 @@ fn a_platform_conditional_is_refused_rather_than_read_as_the_next_key() {
 
 #[test]
 fn a_base_or_include_directive_is_refused_rather_than_stored_as_a_pair() {
-    // Worse than the conditional if it were waved through: the file it names
-    // holds keys that belong to this document, so reading `#base` as an
-    // ordinary key leaves that data missing with nothing to say it existed.
+    // `#base` and `#include` are refused: their data would go missing.
     for input in ["#base \"other.vdf\"\n\"a\" \"1\"\n", "#include \"x.vdf\"\n"] {
         let error = error(input);
         assert_eq!(
@@ -347,9 +304,7 @@ fn a_block_with_no_name_is_an_error_rather_than_a_key_invented_for_it() {
 
 #[test]
 fn nesting_without_end_is_an_error_and_not_a_stack_overflow() {
-    // A file of nothing but open braces is a plausible thing to find in a
-    // corrupt or hostile directory, and a recursive parser without a cap
-    // aborts the process instead of returning something a caller can report.
+    // Deep nesting is an error, not a stack overflow.
     let input = "\"k\" {".repeat(10_000);
 
     let error = error(&input);
@@ -363,9 +318,7 @@ fn nesting_without_end_is_an_error_and_not_a_stack_overflow() {
 
 #[test]
 fn a_document_nested_exactly_to_the_bound_parses_and_one_level_past_it_does_not() {
-    // The check read `>=` where the constant documented the depth as allowed,
-    // so the reader refused one level shallower than it claimed. Built from the
-    // constant, so the fixture moves with it.
+    // The documented depth is allowed; built from the constant.
     use super::MAX_DEPTH;
 
     let nested = |levels: usize| format!("{}{}", "\"k\" {".repeat(levels), "}".repeat(levels));
@@ -383,9 +336,7 @@ fn a_document_nested_exactly_to_the_bound_parses_and_one_level_past_it_does_not(
 
 #[test]
 fn the_reported_column_counts_characters_rather_than_bytes() {
-    // The number is there so a person can put a cursor on the fault. A byte
-    // column is wrong by the width of every non-ASCII character before it,
-    // which is exactly when a game name makes the line hard to eyeball.
+    // Columns count characters, not bytes.
     let error = error("\"名前\" \"値\" }");
 
     assert_eq!(error.kind, ErrorKind::UnmatchedCloseBrace);
@@ -397,18 +348,14 @@ fn the_reported_column_counts_characters_rather_than_bytes() {
 
 #[test]
 fn an_empty_document_is_an_empty_root_rather_than_a_failure() {
-    // A zero-byte file is a real state for a freshly created config, and it
-    // genuinely means "nothing here" — unlike a truncated one, which means
-    // "something here was lost".
+    // An empty file is empty, not truncated.
     assert!(root("").is_empty());
     assert!(root("// only a comment\n").is_empty());
 }
 
 #[test]
 fn a_duplicated_key_keeps_both_entries_and_resolves_to_the_first() {
-    // Valve's reader takes the first. Dropping the second would make the parse
-    // unfaithful to the file, and anything that rewrites one of these files
-    // needs to see what is actually in it.
+    // Duplicate keys are all kept, in order.
     let object = root(r#" "path" "/first"  "path" "/second" "#);
 
     assert_eq!(object.get_str("path"), Some("/first"));

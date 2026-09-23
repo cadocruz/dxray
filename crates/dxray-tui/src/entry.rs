@@ -1,13 +1,6 @@
-//! Everything this project can say about one game, gathered into one value.
-//!
-//! Built on the scanning thread and sent whole down the channel, so the main
-//! loop never opens a file. That is not tidiness: the main loop is the one that
-//! draws, and anything it reads from a disk is a frame the user does not get.
-//!
-//! Every field that can be absent is absent for a reason the screen can print.
-//! There is no `Option` here that renders as a blank — a game with nothing
-//! known about it is a real state, and the detail pane says which kind of
-//! nothing it is.
+//! Everything this project can say about one game, gathered on the scanning
+//! thread and sent whole, so the thread that draws never opens a file. Every
+//! absent field is absent for a reason the screen can print.
 
 use std::io;
 use std::path::PathBuf;
@@ -20,66 +13,28 @@ use dxray_core::launcher::{Game, Identity, Origin};
 /// Proton does to its NVAPI.
 #[derive(Debug, Clone)]
 pub struct Entry {
-    /// What the launcher calls this game, and therefore what can be asked
-    /// about it.
-    ///
-    /// One field where there used to be three — a `u32` that was zero for
-    /// Heroic, an `Option<String>` beside it, and an enum saying which to
-    /// believe. Zero is a real Steam appid, so the placeholder could not be
-    /// told from a game, and keeping the three in step was left to whoever
-    /// touched them next. [`Identity`] is the core type that makes that
-    /// impossible to get wrong.
+    /// What the launcher calls this game, and so what can be asked about it.
     pub identity: Identity,
     /// The launcher, and backend, that supplied this game.
     pub origin: Origin,
     pub name: String,
     pub install_dir: PathBuf,
-    /// The library this game was found in. Kept because two Steam installs can
-    /// declare the same library, and a reader looking at a duplicate-looking
-    /// title needs to see which shelf it came off.
+    /// The library this game was found in, since two installs can declare the
+    /// same one.
     pub library: PathBuf,
     /// The highest-ranked executable, or why there is none.
     pub best: Best,
-    /// The survey's caveats, already worded. Carried in full rather than
-    /// summarised: these are the sentences that say the answer above them may
-    /// be wrong, and a list view is exactly where they would get dropped.
+    /// The survey's caveats, already worded and carried in full.
     pub notes: Vec<String>,
-    /// Set when the survey reported a tie at the top, with the sentence that
-    /// says so.
-    ///
-    /// Held apart from `notes` only because the list column needs a marker it
-    /// can draw beside a headline. The sentence is still in `notes` as well, so
-    /// the detail pane cannot show a tie marker with no explanation under it.
-    /// The list column draws it as `tied`.
+    /// The tie sentence, when the survey reported one. Also in `notes`; kept
+    /// apart so the list column can draw `tied`.
     pub tie: Option<String>,
     /// Whether this install carries any evidence of being a game, exactly as
-    /// [`Survey::has_evidence`] answers it, or `None` when the install
-    /// directory could not be read and the question therefore has no answer.
-    ///
-    /// The one question this browser orders and marks by. It is asked of
-    /// `dxray-core` and never re-derived here: the same call decides the CLI's
-    /// "no executable here carries any evidence of being the game", so the two
-    /// surfaces cannot end up disagreeing about one install.
-    ///
-    /// Deliberately not read off [`Ranked`], which knows only about the
-    /// executable that ranked first. The two do agree today, and only for an
-    /// arithmetic reason: the survey sorts by score, every weight in
-    /// [`weight`](dxray_core::game::weight) is positive, and so a candidate
-    /// with reasons always outranks one without. Deriving the install's answer
-    /// from the top candidate's would make it a consequence of the ranking's
-    /// numbers rather than of the question asked, and the day a reason worth
-    /// nothing is added it would quietly become wrong. Asking core is the same
-    /// price and stays right.
-    ///
-    /// `None` is not "no evidence". An install that could not be walked was
-    /// never asked, and drawing it beside the directories that were read and
-    /// found empty is exactly the conflation this project refuses.
+    /// [`Survey::has_evidence`] answers it, or `None` when it could not be read.
+    /// `None` is not "no evidence": that question was never put.
     pub carries_evidence: Option<bool>,
-    /// True when survey notes or a root error indicate an incomplete search.
-    /// Shares the root-error policy with CLI launcher listings: a missing
-    /// directory retains its diagnostic without the `not searched in full`
-    /// marker. Survey notes use [`Survey::is_incomplete`], the one question
-    /// `--game` and the CLI listings ask too.
+    /// True when survey notes or a root error mean an incomplete search. A
+    /// missing directory keeps its diagnostic without the marker, as in the CLI.
     pub incomplete: bool,
     pub nvapi: dxray_core::proton::Answer,
 }
@@ -90,10 +45,7 @@ pub enum Best {
     /// One was ranked. It may still carry no evidence at all — see
     /// [`Ranked::has_evidence`].
     Ranked(Box<Ranked>),
-    /// The directory listed fine and holds no program.
-    ///
-    /// The ordinary state of a game that is mid-download, which is why it is a
-    /// finding here and not an error.
+    /// The directory listed fine and holds no program: ordinary mid-download.
     NoExecutable,
     /// The install directory itself could not be walked.
     Unwalkable(String),
@@ -106,32 +58,17 @@ pub struct Ranked {
     pub score: i32,
     /// Why it ranked where it did, strongest first, already worded.
     pub reasons: Vec<String>,
-    /// How many executables were ranked in total. The denominator the score
-    /// means nothing without: "100" is a different claim in a directory of one
-    /// than in a directory of forty.
+    /// How many executables were ranked in total, which the score means nothing
+    /// without.
     pub of: usize,
-    /// What the image can reach, or why that could not be read.
-    ///
-    /// A missing verdict is not the same as an empty one. An empty verdict says
-    /// the file was read and recognises nothing; this says the file was not
-    /// read, and the screen prints the error rather than a blank line.
+    /// What the image can reach, or why it could not be read. An error is not an
+    /// empty verdict.
     pub verdict: Result<Verdict, String>,
 }
 
 impl Ranked {
-    /// True when something was observed about **this executable**.
-    ///
-    /// Not the same question as [`Entry::carries_evidence`], which asks whether
-    /// anything in the whole install argues it is a game. This one is asked by
-    /// the detail pane, which is printing one executable's reasons and needs to
-    /// know whether it has any to print.
-    ///
-    /// They answer alike on everything `dxray-core` builds, because no reason
-    /// is worth nothing and the survey sorts by score — see
-    /// [`weight`](dxray_core::game::weight), where that premise is written down
-    /// and held by a test. That agreement is a fact about the weights, not
-    /// about the two questions, so neither call is derived from the other: each
-    /// is asked of its own subject and stays right when the other's changes.
+    /// True when something was observed about this executable, which the detail
+    /// pane asks. Not [`Entry::carries_evidence`], which asks about the install.
     #[must_use]
     pub fn has_evidence(&self) -> bool {
         !self.reasons.is_empty()
@@ -139,18 +76,8 @@ impl Ranked {
 }
 
 impl Entry {
-    /// Assembles the record from what `dxray-core` produced.
-    ///
-    /// One constructor for every launcher, where there used to be one per
-    /// launcher and a private one underneath holding eight positional
-    /// arguments. There is nothing launcher-specific left to do here: the game
-    /// carries its own identity and origin, and the NVAPI answer was already
-    /// decided — by [`Builds::answer_for`](dxray_core::proton::Builds::answer_for),
-    /// which is the one place in the project that knows a Heroic game cannot be
-    /// asked.
-    ///
-    /// `survey` is consumed rather than borrowed because every sentence in it
-    /// is rendered here and nothing downstream wants the structure back.
+    /// Assembles the record from what `dxray-core` produced. Nothing
+    /// launcher-specific is left to do here.
     #[must_use]
     pub fn build(
         game: Game,
@@ -217,19 +144,8 @@ impl Entry {
     }
 
     /// True only when this install was read and nothing in it argues it is a
-    /// game.
-    ///
-    /// The browser's ordering and its `no evidence` marker both turn on this
-    /// one call. False for an install that could not be read: that is an
-    /// unanswered question, not an answer of "nothing", and the headline
-    /// already says which.
-    ///
-    /// The rule itself is
-    /// [`inspect::lacks_evidence`](dxray_core::inspect::lacks_evidence) and is
-    /// not restated here. The `--installed` listing demotes and marks by the
-    /// same question, and two surfaces that each spelled out what `None` means
-    /// could be changed apart — one browser showing an unreadable install
-    /// beside the games while the listing buried it.
+    /// game: [`inspect::lacks_evidence`](dxray_core::inspect::lacks_evidence),
+    /// the rule the CLI listing uses too.
     #[must_use]
     pub fn lacks_evidence(&self) -> bool {
         dxray_core::inspect::lacks_evidence(self.carries_evidence)
@@ -241,12 +157,8 @@ impl Entry {
         self.identity.to_string()
     }
 
-    /// The one-line answer for the list column.
-    ///
-    /// Worded so that the three ways of knowing nothing stay apart: a file that
-    /// was not read, a directory with no program in it, and an image that was
-    /// read and recognises nothing all get their own words. A blank would say
-    /// all three at once and would be wrong about two of them.
+    /// The one-line answer for the list column. A file not read, a directory
+    /// with no program and an image that recognises nothing each get their words.
     #[must_use]
     pub fn headline(&self) -> String {
         match &self.best {
@@ -259,12 +171,8 @@ impl Entry {
         }
     }
 
-    /// True when `needle` — already lowercased by the caller — appears in this
-    /// game's name or in its application id.
-    ///
-    /// The id is matched as well as the name because an appid is the one thing
-    /// about a game that is unambiguous, and somebody who arrived here from a
-    /// Proton bug report has the number and not the title.
+    /// True when `needle`, already lowercased, appears in this game's name or
+    /// its application id.
     #[must_use]
     pub fn matches(&self, needle: &str) -> bool {
         if needle.is_empty() {
@@ -283,9 +191,7 @@ fn rank(candidate: Candidate, of: usize) -> Ranked {
     let verdict = dxray_core::Evidence::from_executable(&candidate.path)
         .map(|evidence| {
             let mut verdict = dxray_core::analyse(&evidence);
-            // Versions belong to the scanning thread for the same reason the
-            // verdict does: every file the main loop opens is a frame nobody
-            // gets. Read through the one shared function, never here.
+            // Versions are read here, on the scanning thread, never by the drawer.
             dxray_core::evidence::stamp_versions(
                 &mut verdict,
                 &candidate.path,
@@ -362,11 +268,7 @@ mod tests {
 
     #[test]
     fn a_truncated_walk_that_found_no_evidence_is_marked_incomplete_too() {
-        // The absence of evidence cannot narrow this, because the truncation is
-        // itself a candidate explanation for the absence: the shipping binary
-        // may be the thing below the bound. An entry whose survey found only a
-        // zero-evidence `launcher.exe` and stopped early is precisely the
-        // answer most likely to be wrong, so it is the last one to mark clean.
+        // No evidence cannot excuse a truncation: the truncation may be why.
         let entry = Entry::build(
             game(),
             PathBuf::from("/library"),
@@ -391,10 +293,8 @@ mod tests {
 
     #[test]
     fn a_missing_install_is_visible_without_claiming_the_scan_was_incomplete() {
-        // Steam deliberately retains a manifest while its download directory
-        // has not appeared. The TUI must name that fact, but it must not draw
-        // the marker reserved for a directory that existed and was only partly
-        // searched.
+        // Steam keeps a manifest before its directory exists: named, but not
+        // marked as partly searched.
         let entry = Entry::build(
             game(),
             PathBuf::from("/steam"),

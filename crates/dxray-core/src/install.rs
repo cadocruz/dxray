@@ -1,25 +1,9 @@
-//! Walking a game's install directory to find the executables in it.
+//! Walking a game's install directory to find the executables in it: the IO
+//! half of [`game`](crate::game).
 //!
-//! The IO half of [`game`](crate::game), kept as thin as
-//! [`evidence`](crate::evidence) is. It lists directories, reads images and
-//! hands the names over; every judgement about what those names mean is in
-//! [`game::assess`](crate::game::assess), where it can be tested against an
-//! awkward layout without a disk or a game.
-//!
-//! **The walk is bounded, and it says when a bound was hit.** A game directory
-//! can hold tens of thousands of files, so there are four limits below and each
-//! of them produces a [`Note`] when it bites. That matters more here than
-//! anywhere else in the crate: a silently truncated scan that reports the
-//! launcher because it never reached the real binary is a confident wrong
-//! answer, which is the one thing this crate must not produce.
-//!
-//! **The order is breadth-first, and that is a compromise rather than a
-//! solution.** Shallow directories are searched first, so a truncated walk
-//! keeps the launcher and loses the shipping binary — the wrong half. Depth
-//! first would lose a different half. There is no order that guarantees finding
-//! the game inside a budget, so the budget is set high enough that a real
-//! install does not come near it and the truncation is reported loudly when it
-//! happens anyway.
+//! The walk is bounded, and every bound that bites becomes a [`Note`]. It is
+//! breadth-first, which is a compromise: no order finds the game inside a
+//! budget, so the budget is set far beyond real installs.
 
 use std::collections::VecDeque;
 use std::fs;
@@ -32,65 +16,31 @@ use crate::analysis::{Evidence, Verdict, analyse};
 use crate::evidence::LibraryCache;
 use crate::game::{Candidate, Note, Observed, Survey, assess};
 
-/// How far below the surveyed directory the walk goes. The root is depth zero.
-///
-/// Thirty-two, which is the same kind of number as [`MAX_EXECUTABLES`]: far
-/// outside anything a game installer produces, so that hitting it is itself the
-/// finding rather than a statement about the budget. Nothing an installer lays
-/// down goes thirty-two levels below its own root; a tree that does is
-/// generated, extracted or somebody's container sysroot.
-///
-/// It was eight — "around six, plus two spare" — and eight is *inside* the
-/// range of real games. Measured across a real library, two installs of five
-/// truncated at it, both on ordinary asset trees sitting at depth nine: a
-/// jQuery `images/` folder inside a game's web UI, and a localised audio
-/// package. A bound that fires on two games in five is not a sign that
-/// something is wrong with the directory, and an exit code drawn from it says
-/// nothing.
-///
-/// The raise costs no guarantee, because depth was never what bounded the work.
-/// [`MAX_DIRECTORIES`] bounds it whatever shape the tree has, and no real
-/// install came near that; and `Listing::read` uses `file_type`, which does not
-/// follow symlinks, so a link pointing back up the tree cannot make the walk
-/// run away no matter how deep the limit is.
+/// How far below the surveyed directory the walk goes; the root is depth zero.
+/// Far outside real installs: eight truncated two of five real games. The work
+/// is bounded by [`MAX_DIRECTORIES`] whatever the depth, and symlinks are never
+/// followed.
 pub const MAX_DEPTH: usize = 32;
 
 /// How many directories the walk will list before giving up.
 pub const MAX_DIRECTORIES: usize = 4096;
 
-/// How many executables will be read and ranked.
-///
-/// A large install has tens. Five hundred is far past anything real, which is
-/// the point: hitting it means something is wrong with the directory rather
-/// than with the limit, and the [`Note`] says so.
+/// How many executables will be read and ranked. Far past anything real, so
+/// hitting it says something is wrong with the directory.
 pub const MAX_EXECUTABLES: usize = 512;
 
-/// How many local libraries one executable's imports will be followed into.
-///
-/// The chain is followed exactly one link — into libraries the image imports
-/// *and* that sit in its own directory — because that is what it takes to see
-/// the renderer behind a stub loader like Unity's. Two links would start
-/// reading the whole dependency graph of a game for a signal that is already
-/// the weakest renderer evidence this module reports.
+/// How many local libraries one executable's imports are followed into, one
+/// link deep: enough to see the renderer behind a Unity stub.
 pub const MAX_LOCAL_LIBRARIES: usize = 16;
 
 /// Every executable under `dir`, ranked best-first, each carrying its reasons.
-///
-/// `game_name` is the title from a Steam manifest or whatever else the caller
-/// knows; `None` simply drops one signal rather than changing how the others
-/// are weighed. The directory's own name is always used as a second, weaker
-/// name to compare against, so a non-Steam install is not left with no name
-/// evidence at all.
-///
-/// Nothing is filtered out. A directory holding nothing but a Visual C++
-/// redistributable comes back with that redistributable in it, scoring zero and
-/// saying why — see [`Survey::has_evidence`].
+/// `game_name` is one signal; the directory's own name is always a second, weaker
+/// one. Nothing is filtered out.
 ///
 /// # Errors
 ///
-/// Fails only if `dir` itself cannot be listed. A subdirectory that cannot be
-/// read is a [`Note::Unreadable`] beside a partial answer, because losing the
-/// rest of the tree over one unreadable folder is the bigger wrong answer.
+/// Fails only if `dir` itself cannot be listed. An unreadable subdirectory is a
+/// [`Note::Unreadable`] beside a partial answer.
 pub fn candidates(dir: &Path, game_name: Option<&str>) -> io::Result<Survey> {
     let root = Listing::read(dir)?;
     let directory_name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -100,11 +50,7 @@ pub fn candidates(dir: &Path, game_name: Option<&str>) -> io::Result<Survey> {
     Ok(walk.finish())
 }
 
-/// The names in one directory, split by kind and sorted.
-///
-/// Read once per directory and shared by every executable in it, because the
-/// neighbours are a fact about the directory and reading them again per binary
-/// would be the same answer at N times the cost.
+/// The names in one directory, split by kind and sorted, read once and shared.
 struct Listing {
     path: PathBuf,
     files: Vec<String>,
@@ -228,16 +174,12 @@ impl Walk {
             return;
         }
 
-        // One verdict for the whole directory: the neighbours are the same for
-        // every binary in it, and this is the evidence that must never be taken
-        // from the install root and attributed to a binary three levels down.
+        // One verdict for the directory, shared by every binary in it.
         let directory = analyse(&Evidence {
             neighbours: listing.files.clone(),
             ..Evidence::default()
         });
-        // One cache for the directory, so an engine DLL that fifty executables
-        // all import is parsed once. It is scoped here because a link is only
-        // ever followed within one directory.
+        // One cache per directory, since links are only followed within one.
         let mut links = LibraryCache::default();
 
         for name in executables {
@@ -274,18 +216,13 @@ impl Walk {
 
         let named = match read_names(&path) {
             Ok(named) => named,
-            // An executable this tool cannot parse is still an executable in a
-            // game directory. It stays in the list, ranked on what its path
-            // says, and the reason it could not be read travels with the
-            // survey rather than being dropped.
+            // Unparsable, but still an executable: ranked on its path, with a note.
             Err(source) => {
                 self.notes.push(Note::Unparsed { path, source });
                 return observed;
             }
         };
-        // The one-link chase, through the same function the verdict uses. Two
-        // implementations of this rule is how the score and the verdict printed
-        // beside it came to disagree about the same binary.
+        // The same one-link chase the verdict uses.
         let linked = links.follow(&path, &named.imports, &named.delay_imports, &listing.files);
         observed.own = analyse(&Evidence {
             imports: named.imports,

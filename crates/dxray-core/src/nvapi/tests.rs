@@ -1,8 +1,5 @@
-//! The scripts below are cut down from real Proton releases and keep the
-//! shapes that matter: the two-level nesting the policy lives at, the comments
-//! Valve writes beside every application id, and the `/proc/modules` block
-//! Proton 10.0 introduced. They are small so that each test can break exactly
-//! one thing, and their shapes are not invented.
+//! Scripts cut down from real Proton releases, keeping the shapes that matter,
+//! small enough for each test to break one thing.
 
 use super::{Decision, Flag, Policy, Reading, RefusalKind, Unknown, decide, scan, settled};
 
@@ -131,9 +128,8 @@ class Session:
         self.check_environment("PROTON_ENABLE_NVAPI", "enablenvapi")
 "#;
 
-/// Every NVAPI flag in the policy set by a shape this reader does not model, so
-/// no site is read at all. The state that must never be mistaken for
-/// [`NO_POLICY`].
+/// Every NVAPI flag set by a shape this reader does not model, so nothing is
+/// read. Must never pass for [`NO_POLICY`].
 const UNREADABLE: &str = r#"import os
 
 def default_compat_config():
@@ -174,9 +170,7 @@ fn read(script: &str) -> Reading {
 
 #[test]
 fn a_game_in_a_flat_disable_list_is_reported_as_withheld() {
-    // The plain case, and the one the whole slice exists to get right: the
-    // application id is in a list whose body sets the flag outright, so what
-    // Proton will do is settled before the game has ever been run.
+    // Listed under an outright flag: settled before the game ever runs.
     let decision = decide(&read(DENY), "1088850");
 
     assert_eq!(
@@ -206,14 +200,8 @@ fn a_game_a_deny_list_does_not_name_keeps_nvapi() {
 
 #[test]
 fn a_test_wrapped_around_a_flat_block_makes_it_conditional_rather_than_vanishing() {
-    // The defect this arrangement exists to prevent. The block below is the
-    // plain, outright shape — nothing between the list and the flag — with one
-    // extra test around it. Reading it as unconditional prints a confident
-    // "NVAPI is withheld" for a game whose fate is gated on something that was
-    // never looked at, and nothing in the output says the test is there.
-    //
-    // A guard this reader cannot state is a *stronger* reason to hedge than one
-    // it can quote, because there is nothing to hand the reader instead.
+    // An extra test around an outright block. It cannot be quoted, so it is
+    // reported as a condition, never as a settled answer.
     let reading = read(WRAPPED);
     let decision = decide(&reading, "1088850");
 
@@ -243,15 +231,8 @@ fn a_test_wrapped_around_a_flat_block_makes_it_conditional_rather_than_vanishing
 
 #[test]
 fn the_block_that_only_binds_the_application_id_is_not_treated_as_a_condition() {
-    // The other side of the rule above, and the one that decides whether this
-    // module is usable at all: every release wraps its whole policy in
-    // `if "SteamAppId" in os.environ:`. Counting that as an unstated guard
-    // would make every site in every real script conditional and the tool
-    // would say nothing about anything.
-    //
-    // It is exempt because it is not a condition on the policy — it is the
-    // condition under which there is an application id to ask about, which a
-    // caller asking about one has already assumed.
+    // The `SteamAppId` guard around every release's policy is exempt: it is the
+    // condition for having an appid at all.
     let reading = read(DENY);
 
     assert!(
@@ -264,10 +245,7 @@ fn the_block_that_only_binds_the_application_id_is_not_treated_as_a_condition() 
 
 #[test]
 fn a_guarded_block_reports_the_condition_instead_of_deciding_it() {
-    // Proton 10.0 split the policy in two, and the second block disables NVAPI
-    // only when *no* NVIDIA driver is loaded — the opposite way round from the
-    // obvious guess, and on the machines this tool is for those games keep
-    // NVAPI. Flattening it either way is wrong for half the world.
+    // Proton 10.0: this block disables NVAPI only when no NVIDIA driver is loaded.
     let decision = decide(&read(GUARDED), "108710");
 
     assert_eq!(
@@ -291,9 +269,7 @@ fn a_guarded_block_reports_the_condition_instead_of_deciding_it() {
 
 #[test]
 fn the_condition_is_quoted_back_so_a_reader_can_apply_it() {
-    // Summarising it would mean interpreting it, and interpreting it is exactly
-    // what this crate has no evidence for: the answer would depend on the
-    // machine dxray runs on rather than on what Proton will do to that game.
+    // Quoted, not interpreted: the answer depends on the machine.
     let decision = decide(&read(GUARDED), "44350");
     let condition = decision.condition().expect("carried");
     let quoted = condition.source().join("\n");
@@ -312,9 +288,7 @@ fn the_condition_is_quoted_back_so_a_reader_can_apply_it() {
 
 #[test]
 fn a_flat_block_and_a_guarded_one_in_the_same_script_stay_apart() {
-    // Proton 10.0 and 11.0 have both. A reader that merged the two lists would
-    // report eight settled games and fourteen more as though they were the
-    // same kind of answer.
+    // Proton 10.0 and 11.0 keep settled and conditional lists apart.
     let reading = read(GUARDED);
     let flat = decide(&reading, "1088850");
     let guarded = decide(&reading, "108710");
@@ -333,11 +307,7 @@ fn a_flat_block_and_a_guarded_one_in_the_same_script_stay_apart() {
 
 #[test]
 fn an_allow_list_script_inverts_what_a_missing_game_means() {
-    // Proton 6.3 to 8.0 name the flag `enablenvapi` and list the games that
-    // *get* NVAPI. A reader that knows only `disablenvapi`, finds none, and
-    // answers "not in the list, so NVAPI is on" gets all 136 games on 8.0
-    // exactly backwards — and gets every other game on that release backwards
-    // too, which is the larger number.
+    // Proton 6.3 to 8.0 list the games that get NVAPI, via `enablenvapi`.
     let reading = read(ALLOW);
 
     assert_eq!(reading.policy(), Some(Policy::AllowList));
@@ -356,10 +326,7 @@ fn an_allow_list_script_inverts_what_a_missing_game_means() {
 
 #[test]
 fn a_forced_game_keeps_nvapi_even_though_it_is_also_listed_to_lose_it() {
-    // Proton's own test is `"disablenvapi" not in config or "forcenvapi" in
-    // config`, so the force list wins. Asserted against a script that puts the
-    // same id in both, because that is the only case where the order of the
-    // checks is observable.
+    // `forcenvapi` wins; only an id in both lists can show it.
     let both = DENY.replace(r#""2395210", #Tony"#, r#""1088850", #Tony"#);
     let decision = decide(&read(&both), "1088850");
 
@@ -373,11 +340,8 @@ fn a_forced_game_keeps_nvapi_even_though_it_is_also_listed_to_lose_it() {
 
 #[test]
 fn a_script_read_in_full_with_no_nvapi_policy_is_a_finding_and_not_a_failure() {
-    // Proton 7.0 really is like this: the function is there, real appid lists
-    // parse out of it, and none of them touches NVAPI. That is a true negative
-    // about the build — its NVAPI is decided by an environment switch rather
-    // than by which game is running — and reporting it with the same sentence
-    // as a script that defeated the reader would throw the distinction away.
+    // Proton 7.0: lists parse and none touches NVAPI. A true negative, unlike a
+    // refused script.
     let reading = read(SWITCH_ONLY);
     let decision = decide(&reading, "1088850");
 
@@ -402,10 +366,7 @@ fn a_script_read_in_full_with_no_nvapi_policy_is_a_finding_and_not_a_failure() {
 
 #[test]
 fn a_policy_hidden_in_a_shape_this_reader_cannot_read_is_never_a_true_negative() {
-    // The companion to the test above, and the pair is the whole point. Both
-    // scripts yield no NVAPI site. One was read in full; in the other the
-    // policy may be entirely inside the part that was refused. They must not
-    // produce the same sentence and must not produce the same exit code.
+    // Read in full versus partly refused: different sentence and exit code.
     let readable = read(SWITCH_ONLY);
     let hidden = read(UNREADABLE);
 
@@ -434,11 +395,8 @@ fn a_policy_hidden_in_a_shape_this_reader_cannot_read_is_never_a_true_negative()
 
 #[test]
 fn a_script_with_nvapi_lists_and_no_direction_does_not_claim_it_has_no_nvapi_lists() {
-    // A `forcenvapi` list and nothing else. The direction of a policy is read
-    // off the disable and enable flags, so this build's direction cannot be
-    // told — but saying "no list touches NVAPI" about it would be false against
-    // the list printed beside it, which is the kind of self-contradiction that
-    // makes a whole report untrustworthy.
+    // Only a `forcenvapi` list: no direction, but not "no list touches NVAPI"
+    // either.
     let reading = read(FORCE_ONLY);
     let decision = decide(&reading, "1088850");
 
@@ -467,9 +425,7 @@ fn a_script_with_nvapi_lists_and_no_direction_does_not_claim_it_has_no_nvapi_lis
 
 #[test]
 fn a_game_named_in_the_only_list_there_is_still_gets_its_answer() {
-    // The direction being unknown does not unmake a positive find: the script's
-    // own expression makes `forcenvapi` sufficient on its own, and a game in
-    // that list is one this build hands NVAPI to whichever way the rest runs.
+    // `forcenvapi` alone hands NVAPI over, whatever the direction.
     let decision = decide(&read(FORCE_ONLY), "2395210");
 
     assert_eq!(decision.available(), Some(true), "got {decision}");
@@ -491,9 +447,7 @@ fn the_answers_a_caller_can_act_on_are_told_apart_in_every_direction() {
     assert_eq!(decide(&switch, "570").available(), None);
     assert_eq!(decide(&hidden, "570").available(), None);
 
-    // `available` is lossy on purpose, so the four `None`s above have to be
-    // separable by something else — and they are, in both the type and the
-    // exit code a caller draws from it.
+    // Each `None` is told apart by its type and exit code.
     assert!(!decide(&guarded, "108710").is_unknown(), "a condition");
     assert!(!decide(&switch, "570").is_unknown(), "a true negative");
     assert!(decide(&hidden, "570").is_unknown(), "a refusal");
@@ -505,9 +459,7 @@ fn the_answers_a_caller_can_act_on_are_told_apart_in_every_direction() {
 
 #[test]
 fn a_script_that_cannot_be_read_never_becomes_an_empty_policy() {
-    // A file that defeated the reader has to come back as an error, never as a
-    // `Reading` with nothing in it. There is no `Reading` to draw a comfortable
-    // "no" from, which is the whole point of the return type.
+    // A file that defeated the reader is an error, never an empty `Reading`.
     let error = scan("def default_compat_config():\n    ret = set(\n").expect_err("unclosed");
 
     assert!(
@@ -518,11 +470,8 @@ fn a_script_that_cannot_be_read_never_becomes_an_empty_policy() {
 
 #[test]
 fn a_script_with_no_such_function_says_so_and_stops() {
-    // Proton 6.3 has no `default_compat_config`, and a script truncated just
-    // above the function is valid Python that looks exactly the same. There is
-    // no way to tell them apart from one file and this reader does not try. It
-    // must not become "no games are affected", and it must not become an error
-    // about a corrupt file either.
+    // No `default_compat_config` (6.3, or a truncated script): neither "no games
+    // affected" nor a corrupt file.
     let reading = read("import os\n\ndef main():\n    pass\n");
     let decision = decide(&reading, "1088850");
 
@@ -541,11 +490,7 @@ fn a_script_with_no_such_function_says_so_and_stops() {
 
 #[test]
 fn a_script_whose_nvapi_mechanism_is_not_a_list_of_games_is_told_apart_from_one_with_none() {
-    // Proton 6.3 has a live NVAPI mechanism — an environment switch and nothing
-    // more — and no function to read it out of. Proton 5.13 has no mechanism at
-    // all. Both land on "no such function", and reporting them identically
-    // would hide the fact that one of those scripts is doing something about
-    // NVAPI that this reader does not model.
+    // 6.3 has an environment switch and no function; 5.13 has neither.
     let mechanism =
         read("def main():\n    check_environment(\"PROTON_ENABLE_NVAPI\", \"enablenvapi\")\n");
     let neither = read("def main():\n    pass\n");
@@ -566,11 +511,7 @@ fn a_script_whose_nvapi_mechanism_is_not_a_list_of_games_is_told_apart_from_one_
 
 #[test]
 fn a_build_that_spells_its_flags_in_some_new_way_is_not_read_as_a_true_negative() {
-    // The narrow net knows three flag names. If a release renames them, no site
-    // is found and nothing is refused, and the reading looks exactly like a
-    // build with no policy. The wide net — every string anywhere that mentions
-    // nvapi, DLL paths and all — is the only evidence that the narrow one
-    // missed something.
+    // Renamed flags are caught by the wide net, not mistaken for no policy.
     let renamed = read(
         "def default_compat_config():\n    ret = set()\n    if appid in [\"108710\"]:\n        \
          ret.add(\"nvapikill\")\n    return ret\n",
@@ -602,10 +543,7 @@ fn a_script_with_no_nvapi_string_anywhere_is_a_plain_true_negative() {
 
 #[test]
 fn a_flag_set_by_a_shape_this_reader_does_not_model_is_refused_rather_than_ignored() {
-    // The net the whole design hangs from. If Proton ever sets the flag from a
-    // loop, from `ret.update`, or under a compound test, the flag name is still
-    // in the file. Missing it silently would produce an empty policy, which
-    // reads as a clean bill of health.
+    // Any unmodelled shape that sets a flag is refused, never dropped.
     let script = r#"def default_compat_config():
     ret = set()
     if "SteamAppId" in os.environ:
@@ -629,10 +567,7 @@ fn a_flag_set_by_a_shape_this_reader_does_not_model_is_refused_rather_than_ignor
 
 #[test]
 fn a_refusal_blocks_a_negative_answer_without_blocking_a_positive_one() {
-    // A refusal means the game being asked about could be in the part that was
-    // not read, so "not in the list" stops being safe. Finding the game in a
-    // list that *was* read is unaffected: the refusal cannot make a positive
-    // find untrue.
+    // A refusal makes "not listed" unsafe, but not a positive find.
     let script = format!(
         "{}\n    for extra in others:\n        ret.add(\"disablenvapi\")\n",
         DENY.trim_end().trim_end_matches("    return ret")
@@ -653,10 +588,7 @@ fn a_refusal_blocks_a_negative_answer_without_blocking_a_positive_one() {
 
 #[test]
 fn an_appid_list_with_an_entry_that_is_not_a_plain_string_says_the_list_is_short() {
-    // A name, an f-string or a concatenation in the list means the list read
-    // out of the file has fewer ids in it than the file has. Reporting the
-    // short list as though it were the whole one is how a listed game becomes
-    // an unlisted one.
+    // A list with a non-literal entry is incomplete, and says so.
     let script = DENY.replace(r#"                "435150","#, "                OTHER_ID,");
     let reading = read(&script);
 
@@ -676,9 +608,7 @@ fn an_appid_list_with_an_entry_that_is_not_a_plain_string_says_the_list_is_short
 
 #[test]
 fn a_comment_beside_an_application_id_never_becomes_an_application_id() {
-    // Valve writes a game's title after every id, apostrophes and all, and
-    // "Marvel's Guardians of the Galaxy" would open a string that swallowed the
-    // rest of the list if comments were not stripped first.
+    // Comments are stripped first: titles carry apostrophes.
     let reading = read(DENY);
     let site = reading
         .sites
@@ -691,9 +621,7 @@ fn a_comment_beside_an_application_id_never_becomes_an_application_id() {
 
 #[test]
 fn a_docstring_that_spells_out_the_policy_is_not_read_as_code() {
-    // A triple-quoted string can hold anything, including this reader's two
-    // shapes. A scanner that matched on text rather than on tokens would read a
-    // changelog entry as a policy.
+    // Matched on tokens, so a docstring is not a policy.
     let script = r#"DOC = """
 def default_compat_config():
     if appid in ["108710"]:
@@ -719,9 +647,7 @@ def default_compat_config():
 
 #[test]
 fn a_script_that_defines_the_function_twice_is_refused() {
-    // Python keeps the last definition. Reading the first would report a policy
-    // that never runs, and there is no evidence in the file about which one the
-    // author meant to leave behind.
+    // Python keeps the last definition.
     let doubled = format!("{DENY}\n{DENY}");
     let error = scan(&doubled).expect_err("two definitions");
 
@@ -730,10 +656,7 @@ fn a_script_that_defines_the_function_twice_is_refused() {
 
 #[test]
 fn a_tab_in_the_function_is_refused_because_the_block_structure_rests_on_it() {
-    // Every block boundary this reader draws comes from a column count, and the
-    // guard stack now rests on those boundaries too. A tab of the wrong width
-    // moves them without moving anything a person can see, which turns a
-    // guarded flag into a flat one.
+    // Blocks come from columns; a tab of the wrong width would move them.
     let tabbed = DENY.replace(
         "            ret.add(\"disablenvapi\")",
         "\t\t\tret.add(\"disablenvapi\")",
@@ -748,10 +671,7 @@ fn a_tab_in_the_function_is_refused_because_the_block_structure_rests_on_it() {
 
 #[test]
 fn a_single_id_compared_with_equality_is_read_as_a_list_of_one() {
-    // Proton writes `if appid == "1621680":` for some workarounds. No NVAPI
-    // flag has been set that way yet, and a reader that only knew `in` would
-    // miss the day one is — which is the same silent miss the refusal net
-    // exists to prevent, so it is cheaper to just read the shape.
+    // `if appid == "...":` is read too.
     let script = r#"def default_compat_config():
     ret = set()
     if appid == "108710":
@@ -764,9 +684,7 @@ fn a_single_id_compared_with_equality_is_read_as_a_list_of_one() {
 
 #[test]
 fn a_body_on_the_same_line_as_the_test_is_still_a_flat_block() {
-    // `if appid in ["x"]: ret.add("disablenvapi")` is legal Python and is not a
-    // guarded block. Treating it as one would report a settled answer as a
-    // condition.
+    // A one-line `if` is not a guarded block.
     let script = r#"def default_compat_config():
     ret = set()
     if appid in ["108710"]: ret.add("disablenvapi")
@@ -793,9 +711,7 @@ fn a_statement_split_across_lines_is_read_as_one_statement() {
 
 #[test]
 fn an_unterminated_string_is_an_error_and_not_a_short_answer() {
-    // A missing closing quote folds the rest of the file into one token. Every
-    // shape after it would stop matching and the policy would come back empty,
-    // which is the answer this module refuses to give by accident.
+    // An unterminated string is an error, not an empty policy.
     let error = scan("x = \"open\ny = 1\n").expect_err("unterminated");
 
     assert!(
@@ -806,9 +722,7 @@ fn an_unterminated_string_is_an_error_and_not_a_short_answer() {
 
 #[test]
 fn nesting_past_the_cap_is_refused_rather_than_run_off_the_stack() {
-    // A stack overflow aborts the process; it is not an error a caller can
-    // catch. One hostile file would kill a whole library scan instead of
-    // producing one refusal.
+    // Deep nesting is refused, not a stack overflow.
     let mut script = String::from("def default_compat_config():\n");
     for depth in 1..200 {
         script.push_str(&"    ".repeat(depth));
@@ -830,10 +744,7 @@ fn nesting_past_the_cap_is_refused_rather_than_run_off_the_stack() {
 
 #[test]
 fn the_lists_and_the_rest_of_the_script_have_to_agree_about_which_way_the_policy_runs() {
-    // The direction is inferred from the flag the lists use, and the inference
-    // is the softest part of this module. A build whose lists say one thing
-    // while its environment switches know only the other is the shape a change
-    // of direction would arrive in, so it is refused rather than answered.
+    // Lists and switches disagreeing on direction is refused.
     let script = format!(
         "{DENY}\ndef check():\n    check_environment(\"PROTON_ENABLE_NVAPI\", \"enablenvapi\")\n"
     );
@@ -856,9 +767,7 @@ fn the_lists_and_the_rest_of_the_script_have_to_agree_about_which_way_the_policy
 
 #[test]
 fn a_release_that_names_both_its_own_flags_is_not_treated_as_a_disagreement() {
-    // Every release since 9.0 names `disablenvapi` and `forcenvapi` together in
-    // its environment switches. The check above must not fire on that, or it
-    // would refuse every real script.
+    // Every release since 9.0 names both switches; that is not a conflict.
     let script = format!(
         "{DENY}\ndef check():\n    check_environment(\"PROTON_DISABLE_NVAPI\", \"disablenvapi\")\n    \
          check_environment(\"PROTON_FORCE_NVAPI\", \"forcenvapi\")\n"
@@ -871,10 +780,7 @@ fn a_release_that_names_both_its_own_flags_is_not_treated_as_a_disagreement() {
 
 #[test]
 fn the_evidence_line_says_which_of_the_facts_behind_an_answer_actually_held() {
-    // Three different facts — the function was found, appid lists were read,
-    // NVAPI sites were among them — and a set of application ids reports none
-    // of them. This is the sentence that lets a reader tell a thin answer from
-    // a solid one.
+    // The evidence sentence separates a thin answer from a solid one.
     let deny = read(DENY).evidence();
     let none = read(NO_POLICY).evidence();
     let missing = read("def main():\n    pass\n").evidence();

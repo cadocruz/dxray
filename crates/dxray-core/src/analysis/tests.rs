@@ -1,7 +1,5 @@
-//! The awkward cases, which are the only ones worth a test.
-//!
-//! Every case here is one where the obvious implementation produces an answer
-//! that is wrong about a real, shipped binary.
+//! The awkward cases: each is one where the obvious implementation is wrong
+//! about a real binary.
 
 use super::{Evidence, LOCAL_OVERRIDE, Source, Verdict, analyse};
 
@@ -33,9 +31,7 @@ fn evidence_for(findings: &[super::Finding], name: &str) -> Vec<String> {
 
 #[test]
 fn a_binary_linking_both_direct3d_11_and_12_reports_both() {
-    // The case that makes a verdict a set. Shipped games link both and ask the
-    // driver at run time which one to use; naming one would be a confident lie
-    // about a choice this tool cannot observe.
+    // Games link both and choose at run time, so a verdict is a set.
     let verdict = analyse(&importing(&["KERNEL32.dll", "d3d11.dll", "d3d12.dll"]));
 
     assert_eq!(
@@ -52,9 +48,7 @@ fn a_binary_linking_both_direct3d_11_and_12_reports_both() {
 
 #[test]
 fn dxgi_on_its_own_is_infrastructure_and_determines_no_api() {
-    // The classic mistake: `dxgi.dll` is the swapchain layer shared by D3D10,
-    // 11 and 12. Reporting it as "DirectX" invents a generation that the import
-    // table does not name.
+    // `dxgi.dll` is shared by D3D10, 11 and 12: no generation is named.
     let verdict = analyse(&importing(&["KERNEL32.dll", "DXGI.dll"]));
 
     assert!(
@@ -71,9 +65,7 @@ fn dxgi_on_its_own_is_infrastructure_and_determines_no_api() {
 
 #[test]
 fn dxgi_alongside_a_renderer_stays_infrastructure_rather_than_a_second_answer() {
-    // Nearly every D3D11 and D3D12 binary imports dxgi too. Letting it into the
-    // renderer set would make the "several renderers" case fire on almost every
-    // file and drain that signal of meaning.
+    // `dxgi.dll` never joins the renderer set.
     let verdict = analyse(&importing(&["dxgi.dll", "d3d12.dll"]));
 
     assert_eq!(names(&verdict.renderers), ["Direct3D 12"]);
@@ -87,10 +79,7 @@ fn dxgi_alongside_a_renderer_stays_infrastructure_rather_than_a_second_answer() 
 
 #[test]
 fn a_renderer_reached_only_by_delay_load_is_reported_and_marked_as_such() {
-    // A game that delay-loads its renderer imports nothing graphical at start.
-    // Dropping delay-load evidence reports it as having no renderer at all;
-    // merging it with imports claims the process always loads it, and it may
-    // never take that path. Both facts have to survive.
+    // Delay-loaded and imported are kept apart; both survive.
     let evidence = Evidence {
         imports: vec!["KERNEL32.dll".to_owned()],
         delay_imports: vec!["d3d12.dll".to_owned()],
@@ -108,9 +97,7 @@ fn a_renderer_reached_only_by_delay_load_is_reported_and_marked_as_such() {
 
 #[test]
 fn a_load_time_import_outranks_a_delay_loaded_one_whatever_the_generation() {
-    // Evidence strength comes before generation order. A renderer the loader
-    // must resolve is a stronger statement than one behind a code path that may
-    // never run, even when the delayed one is newer.
+    // Evidence strength outranks generation.
     let evidence = Evidence {
         imports: vec!["d3d9.dll".to_owned()],
         delay_imports: vec!["d3d12.dll".to_owned()],
@@ -127,10 +114,7 @@ fn a_load_time_import_outranks_a_delay_loaded_one_whatever_the_generation() {
 
 #[test]
 fn an_injector_dll_next_to_the_executable_is_not_a_renderer_signal() {
-    // The exact shape ReShade, SpecialK and OptiScaler install in: a file named
-    // after a system DLL, while the import table never mentions it. Windows
-    // resolves the local copy first, so this is a proxy, and reading it as a
-    // renderer would report an API the binary never asked for.
+    // A local file named after a system DLL the image never imports is a proxy.
     let evidence = Evidence {
         imports: vec!["KERNEL32.dll".to_owned(), "vulkan-1.dll".to_owned()],
         delay_imports: Vec::new(),
@@ -162,9 +146,7 @@ fn an_injector_dll_next_to_the_executable_is_not_a_renderer_signal() {
 
 #[test]
 fn several_proxy_dlls_in_one_directory_are_one_finding_with_every_file_quoted() {
-    // Mod stacks pile up: ReShade as dxgi.dll, a mod loader as version.dll, an
-    // input wrapper as dinput8.dll. One finding keeps the report readable while
-    // the signal list keeps every file recoverable.
+    // Several proxies: one finding, every file kept in the signals.
     let evidence = Evidence {
         neighbours: vec![
             "winmm.dll".to_owned(),
@@ -188,10 +170,7 @@ fn several_proxy_dlls_in_one_directory_are_one_finding_with_every_file_quoted() 
 
 #[test]
 fn a_windows_system_directory_produces_no_injector_findings() {
-    // Point the tool at System32 and the naive rule fires on every renderer DLL
-    // in Windows: the directory holds dxgi.dll, d3d11.dll and opengl32.dll
-    // because it is Windows, not because someone installed a proxy. There the
-    // neighbour rule inverts, so the directory evidence is dropped whole.
+    // A directory full of system DLLs is System32, not proxies.
     let evidence = Evidence {
         imports: vec!["msvcp_win.dll".to_owned()],
         delay_imports: Vec::new(),
@@ -217,12 +196,7 @@ fn a_windows_system_directory_produces_no_injector_findings() {
 
 #[test]
 fn two_os_core_dlls_beside_a_game_are_not_enough_to_discard_the_neighbours() {
-    // The other side of the System32 rule, and the side no test pinned: the
-    // threshold is three, so raising it was caught and lowering it to one or two
-    // was not. At one, any game directory shipping a single redistributable copy
-    // of a common OS DLL would have all of its neighbour evidence thrown away
-    // and a ReShade install beside it would go unreported. Two is the most a
-    // real game directory is plausibly seen with; three is the bound.
+    // The System32 threshold is three: two copies are still a game directory.
     let evidence = Evidence {
         neighbours: vec![
             "kernel32.dll".to_owned(),
@@ -261,10 +235,7 @@ fn empty_evidence_is_an_empty_verdict_rather_than_a_panic() {
 
 #[test]
 fn import_names_are_matched_without_regard_to_case_but_quoted_as_written() {
-    // PE import names are spelled however the linker felt that day; `D3D12.DLL`
-    // and `d3d12.dll` both occur. A case-sensitive table silently misses half
-    // of them, and normalising the input would make the report quote a name
-    // that is not in the file.
+    // Names match without case and are quoted as spelled.
     let verdict = analyse(&importing(&["D3D12.DLL", "Vulkan-1.Dll"]));
 
     assert_eq!(names(&verdict.renderers), ["Direct3D 12", "Vulkan"]);
@@ -277,9 +248,7 @@ fn import_names_are_matched_without_regard_to_case_but_quoted_as_written() {
 
 #[test]
 fn the_versioned_direct3d_11_interfaces_all_land_on_one_finding() {
-    // `d3d11_1.dll` through `d3d11_4.dll` are the versioned device interfaces,
-    // not four renderers. Reporting four would make the set look like four
-    // run-time choices when there is one.
+    // Versioned D3D11 interfaces are one renderer.
     let verdict = analyse(&importing(&["d3d11.dll", "d3d11_2.dll", "d3d11_4.dll"]));
 
     assert_eq!(names(&verdict.renderers), ["Direct3D 11"]);
@@ -292,9 +261,7 @@ fn the_versioned_direct3d_11_interfaces_all_land_on_one_finding() {
 
 #[test]
 fn a_shipped_dlss_dll_is_found_in_the_directory_because_it_is_in_no_import_table() {
-    // This is why neighbour provenance earns its place. `nvngx_dlss.dll` is
-    // loaded by name at run time by the NGX loader and appears in no import
-    // table of any binary; shipping the file is how DLSS arrives at all.
+    // `nvngx_dlss.dll` is loaded by name, so only the neighbour shows it.
     let evidence = Evidence {
         imports: vec!["d3d12.dll".to_owned(), "nvapi64.dll".to_owned()],
         delay_imports: Vec::new(),
@@ -327,15 +294,8 @@ fn a_shipped_dlss_dll_is_found_in_the_directory_because_it_is_in_no_import_table
 
 #[test]
 fn the_dlss_5_runtime_is_named_and_leads_the_runtimes_it_ships_beside() {
-    // A directory with all four runtimes in it used to come back with three
-    // findings and silence about the one that makes it a DLSS 5 install. Three
-    // true lines and a hole reads as a complete answer, which is worse than no
-    // answer at all.
-    //
-    // The order is the table's specificity rule, not recency: the baseline
-    // runtime ships with almost every title that ships any of them and narrows
-    // least, so it comes last, and neural rendering — which arrives on top of a
-    // directory that already has the other three — comes first.
+    // All four DLSS runtimes are reported, most specific first: neural
+    // rendering first, the baseline last.
     let evidence = Evidence {
         neighbours: vec![
             "nvngx_dlss.dll".to_owned(),
@@ -389,11 +349,7 @@ fn the_fsr_and_xess_libraries_are_recognised_by_their_family_names() {
 
 #[test]
 fn an_agility_sdk_runtime_in_the_directory_is_a_renderer_signal_not_an_injector() {
-    // `D3D12Core.dll` is the one system-adjacent file whose presence next to a
-    // game means what it says: it is a Microsoft redistributable that only a
-    // Direct3D 12 application ships, and it is loaded by d3d12.dll by name
-    // rather than being a loader-order trick. Filing it with the proxies would
-    // throw away a genuine signal.
+    // `D3D12Core.dll` beside a game is a real D3D12 signal, not a proxy.
     let evidence = Evidence {
         neighbours: vec!["D3D12Core.dll".to_owned(), "game.exe".to_owned()],
         ..Evidence::default()
@@ -415,11 +371,7 @@ fn an_agility_sdk_runtime_in_the_directory_is_a_renderer_signal_not_an_injector(
 
 #[test]
 fn the_entry_points_that_only_show_up_in_real_binaries_are_in_the_tables_too() {
-    // Found by sweeping the import tables of every binary in System32 rather
-    // than by reading documentation. `d3d10_1core.dll` ships beside
-    // `d3d10core.dll` and is easy to leave out of a hand-written table, and
-    // `d3d11on12.dll` is Direct3D 11 code on a Direct3D 12 device — the
-    // application wrote Direct3D 11, so that is what it is reported as.
+    // `d3d11on12.dll` is Direct3D 11 code, and reported as such.
     let verdict = analyse(&importing(&["d3d11on12.dll", "d3d10_1core.dll"]));
 
     assert_eq!(names(&verdict.renderers), ["Direct3D 11", "Direct3D 10"]);
@@ -440,10 +392,7 @@ fn the_same_library_named_twice_does_not_count_twice() {
 
 #[test]
 fn a_renderer_reached_through_a_linked_library_is_attributed_to_that_library() {
-    // A Unity executable imports UnityPlayer.dll and nothing graphical. The
-    // signal names the intermediary rather than the API it reaches, because
-    // `UnityPlayer.dll` is what this import table actually spells and it is the
-    // file a reader would go and open.
+    // Unity: the signal names `UnityPlayer.dll`, the file to open.
     let evidence = Evidence {
         imports: vec!["KERNEL32.dll".to_owned(), "UnityPlayer.dll".to_owned()],
         linked: vec![super::Linked {
@@ -467,10 +416,7 @@ fn a_renderer_reached_through_a_linked_library_is_attributed_to_that_library() {
 
 #[test]
 fn a_linked_library_contributes_no_features() {
-    // Features arrive from files in the directory, never from an import table:
-    // nvngx_dlss.dll is loaded by name at run time and appears in no import
-    // table anywhere. Reading one out of a linked library would report a
-    // capability on evidence that cannot exist.
+    // Features come only from directory files, never a linked import.
     let evidence = Evidence {
         imports: vec!["Engine.dll".to_owned()],
         linked: vec![super::Linked {
@@ -488,19 +434,14 @@ fn a_linked_library_contributes_no_features() {
 
 #[test]
 fn a_direct_import_sorts_above_the_same_api_reached_through_a_library() {
-    // Both are true at once for plenty of engines, and the stronger claim is
-    // the executable's own import table. `Source` is ordered so this falls out
-    // of the derive rather than needing a comparator at every use.
+    // The image's own import is the stronger claim.
     assert!(super::Source::Import < super::Source::Linked);
     assert!(super::Source::Linked < super::Source::Neighbour);
 }
 
 #[test]
 fn a_neighbouring_vulkan_loader_is_reported_like_every_other_system_renderer_dll() {
-    // `vulkan-1.dll` beside an executable is the same shadowing trick as a
-    // local `d3d11.dll`, and it was the one system renderer name missing from
-    // the table: the verdict came back byte-identical to the one for an empty
-    // directory, so the file was not merely unexplained, it was unmentioned.
+    // A local `vulkan-1.dll` is a proxy too.
     let verdict = analyse(&Evidence {
         neighbours: vec!["game.exe".to_owned(), "vulkan-1.dll".to_owned()],
         ..Evidence::default()
@@ -524,10 +465,7 @@ fn a_neighbouring_vulkan_loader_is_reported_like_every_other_system_renderer_dll
 
 #[test]
 fn a_binary_importing_only_dxcore_is_told_what_was_actually_found() {
-    // DXCore is the newer adapter-enumeration layer and fills the same slot as
-    // DXGI. Filed nowhere it produced "no graphics API determined" about a file
-    // that names an adapter layer; named DXGI it would claim a library the file
-    // does not contain. The sentence is built from what was found instead.
+    // DXCore, like DXGI, names an adapter layer and no renderer.
     let verdict = analyse(&importing(&["KERNEL32.dll", "dxcore.dll"]));
 
     assert_eq!(names(&verdict.infrastructure), ["DXCore"]);
@@ -544,9 +482,7 @@ fn a_binary_importing_only_dxcore_is_told_what_was_actually_found() {
 
 #[test]
 fn a_binary_importing_both_adapter_layers_names_both_and_still_claims_no_api() {
-    // The case that exists in System32 today (Taskmgr.exe). Naming one of the
-    // two would be a choice the evidence does not support, and the headline
-    // must still not read as "DirectX".
+    // DXGI and DXCore together (Taskmgr.exe): neither is picked.
     let verdict = analyse(&importing(&["dxgi.dll", "dxcore.dll"]));
 
     assert_eq!(
@@ -558,10 +494,7 @@ fn a_binary_importing_both_adapter_layers_names_both_and_still_claims_no_api() {
 
 #[test]
 fn the_graphics_question_the_report_asks_agrees_with_the_verdict_it_prints() {
-    // The report's graphics/other split used to keep a prefix table of its own,
-    // and the two disagreed: `amd_fidelityfx_dx12.dll` was reported as FSR in
-    // one row and as non-graphical two rows below it. Anything this crate has a
-    // rule an import table can trigger answers yes here, by construction.
+    // One answer to "is this graphical", shared with the report.
     for name in [
         "amd_fidelityfx_dx12.dll",
         "AMD_FidelityFX_DX12.dll",
@@ -569,10 +502,7 @@ fn the_graphics_question_the_report_asks_agrees_with_the_verdict_it_prints() {
         "DXGI.dll",
         "dxcore.dll",
         "nvngx_dlss.dll",
-        // The driver's own copy. `analysis.rs` learned that the leading
-        // underscore is not a typo and wrote a comment saying so; the CLI's
-        // prefix table never did, because `"_nvngx.dll".starts_with("nvngx")`
-        // is false. Two tables, one of which learned something.
+        // The driver's copy, leading underscore and all.
         "_nvngx.dll",
         // Known to no table, kept by the deliberately broad prefixes.
         "d3dcompiler_47.dll",
@@ -597,10 +527,7 @@ fn the_graphics_question_the_report_asks_agrees_with_the_verdict_it_prints() {
 
 #[test]
 fn a_shadowable_name_that_draws_nothing_is_the_crowd_in_an_import_list() {
-    // A *file* of one of these names beside an executable is a mod loader. In
-    // an import table they are audio, input, HTTP and versioning, and ordinary
-    // games import them: `winmm.dll` was printed at the top of the row headed
-    // `graphics` in practically every report this tool produced.
+    // Mod-loader proxy names are not graphical imports.
     for name in [
         "winmm.dll",
         "dsound.dll",
@@ -651,9 +578,7 @@ fn every_shadowable_name_that_does_draw_is_still_pulled_out_of_the_crowd() {
 
 #[test]
 fn a_shipped_agility_runtime_and_an_imported_d3d12_are_one_finding() {
-    // What a Direct3D name means lives in `renderer`. It was written twice —
-    // there and as a literal in the neighbours loop — and renaming it in the
-    // table left the literal behind with the whole suite green.
+    // Direct3D names come from `renderer`, not a literal.
     let verdict = analyse(&Evidence {
         imports: vec!["d3d12.dll".to_owned()],
         neighbours: vec!["D3D12Core.dll".to_owned()],
@@ -674,10 +599,7 @@ fn a_shipped_agility_runtime_and_an_imported_d3d12_are_one_finding() {
 
 #[test]
 fn a_versioned_direct3d_interface_beside_a_game_is_an_override_like_any_other() {
-    // The neighbour loop asked "is it one of these sixteen names" where the
-    // rule it implements is "is it a system DLL a local file can shadow". The
-    // versioned interfaces ship, are shadowed by the same loader rule, and were
-    // the category — not the single name — that fell through into silence.
+    // Any shadowable system DLL counts, including versioned interfaces.
     let verdict = analyse(&Evidence {
         neighbours: vec!["d3d11on12.dll".to_owned(), "d3d10core.dll".to_owned()],
         ..Evidence::default()

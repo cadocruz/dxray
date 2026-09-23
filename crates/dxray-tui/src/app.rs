@@ -24,9 +24,8 @@ pub struct App {
     filter: String,
     /// `filter`, lowercased once rather than on every comparison.
     needle: String,
-    /// The display order: indices into `entries`, evidence-carrying first.
-    /// Rebuilt by [`App::reindex`], the only thing that may follow a write to
-    /// `entries` or `filter`.
+    /// Indices into `entries`, in display order. Rebuilt only by
+    /// [`App::reindex`].
     order: Vec<usize>,
     /// How many of `order` carry evidence, so the section break is a field
     /// rather than a scan.
@@ -40,10 +39,8 @@ pub struct App {
     pub(crate) focus: Focus,
     pub(crate) width: u16,
     pub(crate) height: u16,
-    /// Rows the list can show and rows the detail pane can scroll, for the
-    /// current terminal size. Cached because `layout` runs ratatui's constraint
-    /// solver at 82µs a call, and the offset search below asks once per
-    /// candidate offset — most of the cost of an arriving game.
+    /// Rows the list and detail pane can show at the current size. Cached:
+    /// `layout` costs 82µs a call.
     list_rows: usize,
     detail_rows: usize,
     pub(crate) roots: usize,
@@ -208,27 +205,10 @@ impl App {
         offset
     }
 
-    /// The entries the list shows, in the order it shows them.
-    ///
-    /// Two groups, never fewer rows: everything the scan found is here, and the
-    /// installs that were read and carry no evidence of being a game are moved
-    /// below the rest rather than hidden. On a real library that is roughly
-    /// four rows in nine — Proton builds and Steam runtimes — and the answer
-    /// that they argue nothing was already computed and thrown away. Erring by
-    /// showing something extra beats erring by hiding a game, so this demotes
-    /// and marks; it never filters.
-    ///
-    /// An install that could not be read stays with the games. It was not
-    /// asked, and demoting it would put an unanswered question where an answer
-    /// of "nothing" belongs.
-    ///
-    /// Within each group the arrival order is kept. There is no second sort
-    /// key: reordering games against each other would be this browser claiming
-    /// a ranking between games that no evidence supports.
-    ///
-    /// `entries` itself stays in arrival order, so [`App::selected`] — an index
-    /// into it — keeps pointing at the same game when an arrival changes the
-    /// order on screen.
+    /// The entries the list shows, in display order. Installs read and found to
+    /// carry no evidence are moved below the rest, never hidden; an unread one
+    /// stays with the games. Arrival order is kept within each group, and
+    /// `entries` itself never reorders, so [`App::selected`] stays valid.
     fn filtered_indices(&self) -> impl Iterator<Item = usize> + '_ {
         self.order.iter().copied()
     }
@@ -331,9 +311,8 @@ impl App {
                     Focus::Detail => Focus::List,
                 }
             }
-            // Every printable character, including `q`, is searchable text.
-            // Esc has the conventional two-stage meaning: clear an active
-            // filter, then leave the browser once there is nothing to clear.
+            // Every printable character is filter text. Esc clears the filter,
+            // then quits.
             Key::Escape if self.filter.is_empty() => self.quitting = true,
             Key::Escape => {
                 self.filter.clear();
@@ -407,20 +386,15 @@ impl Model for App {
                 if self.selected.is_none() && self.selected_position().is_none() {
                     self.select(0);
                 } else {
-                    // Entries stream in while the scan runs, and one that
-                    // carries evidence lands above every install that carries
-                    // none. That moves the selected game's row without moving
-                    // the selection, so the viewport is re-aimed at it here
-                    // rather than at whatever slid into its old position.
+                    // An arrival can move the selected row; keep it in view.
                     self.keep_selection_visible();
                 }
             }
             Msg::Problem(problem) => self.problems.push(ScanMessage::Problem(problem)),
             Msg::Note(note) => self.problems.push(ScanMessage::Note(note)),
             Msg::Finished => self.finished = true,
-            // Ticks can already be queued when the scan completes. Ignoring
-            // them makes the completed header stable even before the ticker
-            // worker observes the completion signal and exits.
+            // Ticks queued before completion are ignored, so the header stays
+            // still.
             Msg::Tick if !self.finished => self.spinner.tick(),
             Msg::Tick => {}
         }
@@ -500,9 +474,8 @@ mod tests {
         assert_eq!(app.selected, Some(1));
     }
 
-    /// An entry built the way the scanning thread builds it, from a survey, so
-    /// that the evidence question is answered by `dxray-core` and not by the
-    /// test.
+    /// An entry built from a survey, as the scanning thread builds it, so
+    /// `dxray-core` answers the evidence question.
     fn surveyed(appid: u32, name: &str, reasons: Vec<Reason>) -> Entry {
         let survey = Survey::ranked(
             vec![Candidate {
@@ -542,10 +515,7 @@ mod tests {
 
     #[test]
     fn installs_that_argue_nothing_sort_last_and_none_of_them_is_dropped() {
-        // A Proton build and a Steam runtime are ranked exactly like this: an
-        // executable is found, and nothing about it argues it is a game. They
-        // are moved down, never out — hiding one would hide a game the day the
-        // ranking is wrong about it.
+        // Demoted, never hidden.
         let mut app = App::new(24);
         add_surveyed(&mut app, 10, "Alpha", vec![Reason::ShippingSuffix]);
         add_surveyed(&mut app, 20, "Runtime", Vec::new());
@@ -558,9 +528,7 @@ mod tests {
 
     #[test]
     fn an_install_that_could_not_be_read_keeps_its_place_among_the_games() {
-        // It was never asked the question. Sorting it with the directories
-        // that were read and found empty would make an unanswered question
-        // look like an answer of "nothing".
+        // Unread is not "nothing".
         let mut app = App::new(24);
         add_surveyed(&mut app, 10, "Runtime", Vec::new());
         app.update(Msg::Game(Box::new(Entry::build(
@@ -585,9 +553,7 @@ mod tests {
 
     #[test]
     fn the_selection_follows_the_game_when_a_later_arrival_reorders_the_list() {
-        // `selected` is an index into `entries`, which stays in arrival order
-        // precisely so this holds. Entries stream in while the scan runs, and
-        // one that carries evidence lands above every one that carries none.
+        // `selected` indexes `entries`, which keeps arrival order.
         let mut app = App::new(24);
         add_surveyed(&mut app, 10, "Runtime", Vec::new());
         add_surveyed(&mut app, 20, "Redistributable", Vec::new());

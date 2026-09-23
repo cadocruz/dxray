@@ -5,10 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 pub(crate) const SPLIT_WIDTH: u16 = 100;
 pub(crate) const MEDIUM_HEADER_WIDTH: u16 = 60;
 
-/// The parts of the screen used by the browser.
-///
-/// Keeping these calculations here ensures that the reducer clamps scroll
-/// offsets against precisely the same rounded layout that the renderer uses.
+/// The parts of the screen used by the browser, shared by the reducer and
+/// the renderer so scroll clamping matches what is drawn.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Areas {
     pub(crate) header: Rect,
@@ -64,9 +62,7 @@ pub(crate) fn detail_viewport(terminal_width: u16, terminal_height: u16) -> Rect
     )
 }
 
-/// Rows available to game names after the list's border is accounted for.
-///
-/// Uses the same header and help reservations as rendering.
+/// Rows available to game names inside the list's border.
 #[must_use]
 pub fn list_rows(terminal_width: u16, terminal_height: u16) -> usize {
     usize::from(

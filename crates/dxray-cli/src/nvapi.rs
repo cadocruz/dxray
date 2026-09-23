@@ -1,18 +1,6 @@
-//! The `nvapi` listing: what one Proton build's launcher script will do to a
-//! game's NVAPI, and how much of that script was actually understood.
-//!
-//! The judgement is `dxray-core`'s; this module lays it out and caches it. It
-//! prints the evidence *before* the answers, in that order and never the other
-//! way round, because "this game is not in the list" is worth one thing when
-//! thirty lists were read and nothing at all when the function was never found.
-//! A tool that printed the answer alone would be hiding the only thing that
-//! says whether to believe it.
-//!
-//! **Nothing here has been run against a Proton on a real machine.** There is
-//! none on the machine it was written on, and no Steam, no prefix and no NVIDIA
-//! GPU either. It has been run against genuine upstream `proton` scripts, which
-//! settles how the reader behaves on real source and settles nothing at all
-//! about how a real install is laid out around it.
+//! The `nvapi` listing: what one Proton build will do to a game's NVAPI, and
+//! how much of its script was understood. The evidence is printed before the
+//! answers, since an answer is only worth what was read to reach it.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -31,22 +19,15 @@ const INDENT: usize = 2 + LABEL;
 /// What one `nvapi` run produced.
 pub struct Outcome {
     pub text: String,
-    /// True when a question that was asked did not get an answer.
-    ///
-    /// A stricter rule than `steam` uses, and deliberately: here the policy
-    /// *is* the question, so failing to read it is a failed run. In a listing
-    /// that sweeps a whole machine, a game with no prefix is the ordinary state
-    /// of most of a library and costs nothing. Both rules are written down
-    /// where they are applied.
+    /// True when a question that was asked got no answer. Stricter than
+    /// `steam`: here the policy is the question.
     pub failed: bool,
 }
 
 /// Reads the policy in `target` and says what it does to `appids`.
 pub fn inspect(target: &Path, appids: &[String]) -> Outcome {
     let mut text = String::new();
-    // The banner is written exactly once, here, before anything that can fail
-    // with a path of its own. It used to be written again by the failure path,
-    // which printed the file name twice above its own error.
+    // The banner, written once, before anything that can fail.
     let script = match proton::resolve(target) {
         Ok(script) => {
             let _ = writeln!(text, "{}", script.display());
@@ -64,9 +45,7 @@ pub fn inspect(target: &Path, appids: &[String]) -> Outcome {
     };
     let reading = match nvapi::scan(&source) {
         Ok(reading) => reading,
-        // The whole point of the pure module's error type reaching this far: a
-        // script that defeated the reader must not be able to produce the same
-        // output as one that was read and holds no policy.
+        // A script that defeated the reader must not look like one with no policy.
         Err(error) => return failure(text, &error),
     };
 
@@ -74,11 +53,8 @@ pub fn inspect(target: &Path, appids: &[String]) -> Outcome {
     row(&mut text, "policy", &policy_line(&reading));
     sites(&mut text, &reading);
 
-    // Drawn from the pure module's own answer about a game no script lists, so
-    // a run that names no application id and a run that names one cannot
-    // disagree about whether this build was read well enough to answer with.
-    // A build with no per-game policy at all is *settled*: that is a finding
-    // about the build, not a failure to read it.
+    // The same answer with or without an appid. A build with no per-game policy
+    // is settled, not failed.
     let mut failed = !nvapi::settled(&reading);
     for appid in appids {
         let decision = nvapi::decide(&reading, appid);
@@ -100,11 +76,7 @@ fn failure(mut text: String, error: &dyn std::fmt::Display) -> Outcome {
     Outcome { text, failed: true }
 }
 
-/// The sentence that says which way round the policy runs.
-///
-/// Spelled out rather than named, because "deny-list" is a word this tool made
-/// up and the thing it stands for is the difference between a game keeping
-/// NVAPI and losing it.
+/// The sentence that says which way the policy runs, in plain words.
 fn policy_line(reading: &Reading) -> String {
     match reading.policy() {
         Some(Policy::DenyList) => format!(
@@ -118,12 +90,8 @@ fn policy_line(reading: &Reading) -> String {
              way.",
             Policy::AllowList.flag()
         ),
-        // No direction to report. What is printed instead is the pure module's
-        // own account of the build, because there is more than one way to have
-        // no direction and they are not the same news: a build with no per-game
-        // policy at all, one whose only lists are `forcenvapi`, one whose flags
-        // are spelled some new way, and one whose policy was refused all land
-        // here and must not share a sentence.
+        // No direction: the build's own account, since each way of having
+        // none is different news.
         None => nvapi::overall(reading).to_string(),
     }
 }
@@ -159,11 +127,8 @@ fn sites(text: &mut String, reading: &Reading) {
     }
 }
 
-/// Prints a condition back verbatim.
-///
-/// Quoted rather than summarised because the reader of the output is the one
-/// who gets to apply it: they know whether their machine has an NVIDIA module
-/// loaded and this tool has decided, on purpose, not to look.
+/// Prints a condition verbatim; the reader knows their machine, and this tool
+/// does not look.
 fn quote(text: &mut String, source: &[String]) {
     for line in source {
         let _ = writeln!(text, "{:INDENT$}| {line}", "");
@@ -184,9 +149,7 @@ mod tests {
 
     #[test]
     fn a_path_that_is_not_a_proton_is_a_row_rather_than_a_silence() {
-        // `nvapi /some/folder` that finds nothing must not go on to report
-        // that the folder has no NVAPI policy, which reads as a fact about
-        // Proton rather than about the path that was typed.
+        // A path that finds nothing is not a build with no policy.
         let outcome = inspect(Path::new("/definitely/not/here"), &[]);
 
         assert!(outcome.failed);
@@ -195,9 +158,7 @@ mod tests {
 
     #[test]
     fn the_policy_line_spells_out_which_way_round_the_lists_run() {
-        // "deny-list" is a phrase this tool invented. What it stands for is the
-        // difference between a game keeping NVAPI and losing it, so the line
-        // says it in words that do not need this crate's vocabulary.
+        // Said in plain words, not this crate's vocabulary.
         let deny = scan(
             "def default_compat_config():\n    if appid in [\"1\"]:\n        \
              ret.add(\"disablenvapi\")\n",

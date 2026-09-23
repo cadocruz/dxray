@@ -1,9 +1,5 @@
-//! What was learned about one file, and how it turns into one line of JSON.
-//!
-//! A record exists for every input file, including the ones that failed. A
-//! harness that reads the output has to be able to line results up with inputs
-//! without counting, so a failure is a row with an `error` in it rather than a
-//! row that is missing.
+//! What was learned about one file, and its one line of JSON. A failure is a
+//! row with an `error`, so output lines up with inputs.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -14,10 +10,6 @@ use dxray_core::{Evidence, Verdict, analyse};
 use dxray_pe::Pe;
 
 /// Everything reported about a single file.
-///
-/// The optional fields are three-state in JSON terms — a version can be absent
-/// because the image carries no version resource, which is not a failure, and a
-/// machine can be absent only because nothing could be parsed at all.
 pub struct Record {
     pub path: String,
     pub machine: Option<String>,
@@ -27,9 +19,8 @@ pub struct Record {
     pub file_version: Option<String>,
     pub product_version: Option<String>,
     pub error: Option<String>,
-    /// What `dxray-core` made of the imports and the directory. Empty for a
-    /// file that failed, because a verdict drawn from no evidence would read as
-    /// a finding about the file rather than about the scan.
+    /// What `dxray-core` made of the imports and the directory; empty for a
+    /// file that failed.
     pub verdict: Verdict,
 }
 
@@ -49,25 +40,13 @@ impl Record {
         }
     }
 
-    /// Reads `path` and reports what the image says about itself.
-    ///
-    /// A single failing accessor sinks the whole record rather than being
-    /// reported as an empty list, because "imports nothing" and "the import
-    /// table could not be read" are different facts and only one of them is
-    /// worth acting on.
+    /// Reads `path` and reports what the image says about itself. One failing
+    /// accessor sinks the record: "imports nothing" is not "could not read".
     pub fn read(path: &Path) -> Self {
         Self::read_with(path, &mut LibraryCache::default())
     }
 
     /// The same, reusing what `cache` has already read of this directory.
-    ///
-    /// A scan of one directory asks the same questions of the same libraries
-    /// once per file in it: an 803-file folder used to open each of its three
-    /// DLSS runtimes 805 times, because every record listed the directory
-    /// afresh and nothing was remembered between records. Handing one cache
-    /// down the walk makes that one read each, and it also collapses the second
-    /// multiplier — an imported library was read once for the link chase and
-    /// again for its version, and now both answers come out of the one read.
     pub fn read_with(path: &Path, cache: &mut LibraryCache) -> Self {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
@@ -82,18 +61,13 @@ impl Record {
     fn from_image(path: &Path, bytes: &[u8], cache: &mut LibraryCache) -> dxray_pe::Result<Self> {
         let pe = Pe::parse(bytes)?;
         let version = pe.version_info()?;
-        // Assembled, analysed, then taken apart again: the record and the
-        // evidence want the same two lists, and handing them over rather than
-        // cloning keeps one copy of a table that can run to hundreds of names.
+        // Moved into the evidence and back out, rather than cloned.
         let imports = pe.imports()?;
         let delay_imports = pe.delay_imports()?;
         // Listed through the cache too: one `read_dir` for a directory rather
         // than one per file in it.
         let neighbours = cache.neighbours(path);
-        // The same one-link chase the ranking does, through the one function
-        // that knows how to do it. A record that skipped it would call a Unity
-        // stub "no graphics API determined" while `game` called it Direct3D,
-        // about the same file in the same run.
+        // The same one-link chase the ranking does.
         let linked = cache.follow(path, &imports, &delay_imports, &neighbours);
         let evidence = Evidence {
             imports,
@@ -102,10 +76,7 @@ impl Record {
             linked,
         };
         let mut verdict = analyse(&evidence);
-        // The version of every library the verdict points at, read through the
-        // one function that knows how. `nvngx_dlss.dll` is called that in every
-        // build ever shipped, so the name alone answers nothing and the number
-        // is the whole question a reader came with.
+        // The version of every library the verdict points at.
         cache.stamp(&mut verdict, path, &evidence.neighbours);
         Ok(Self {
             path: display_path(path),
@@ -120,15 +91,9 @@ impl Record {
         })
     }
 
-    /// One line of JSONL: always thirteen keys, always in this order.
-    ///
-    /// Written by hand so the order is a property of this function rather than
-    /// of a derive macro's field order, since the order is part of what callers
-    /// were promised.
-    ///
-    /// The first eight keys are frozen, in their original order, because a
-    /// harness already reads them positionally. Everything the verdict adds is
-    /// appended after `error` and never inserted among them.
+    /// One line of JSONL: always thirteen keys, always in this order. The first
+    /// eight are frozen, since harnesses read them positionally; new keys are
+    /// only ever appended.
     pub fn to_json(&self) -> String {
         let mut out = String::with_capacity(256);
         out.push('{');
@@ -165,12 +130,8 @@ impl Record {
     }
 }
 
-/// A list of findings, each carrying the observations behind it.
-///
-/// The provenance is nested rather than flattened into parallel arrays: which
-/// library produced a finding, and whether it was imported, delay-loaded or
-/// merely found in the directory, is part of the finding and stays attached to
-/// it where a consumer cannot lose the pairing.
+/// A list of findings, each with its observations nested so a consumer
+/// cannot lose which library and source supported it.
 fn push_findings(out: &mut String, key: &str, findings: &[Finding]) {
     let _ = write!(out, "\"{key}\":[");
     for (i, finding) in findings.iter().enumerate() {
@@ -197,13 +158,8 @@ fn push_findings(out: &mut String, key: &str, findings: &[Finding]) {
     out.push(']');
 }
 
-/// The version of the file a signal names, always the same three keys.
-///
-/// Rectangular on purpose. A consumer that wants the number reads `file`; one
-/// that wants to know *why* there is no number reads `state`, which is the
-/// difference between a DLL the game ships without a version resource, a name
-/// the loader takes from `System32`, and a file that could not be read at all.
-/// `0.0.0.0` is a value of `file` like any other and never a null.
+/// The version of the file a signal names, always as `state`, `file` and
+/// `product`. `0.0.0.0` is a value of `file`, never a null.
 fn push_version(out: &mut String, version: dxray_core::FileVersion) {
     let _ = write!(out, "\"version\":{{");
     push_string(out, "state", version.state());
@@ -219,28 +175,19 @@ fn push_version(out: &mut String, version: dxray_core::FileVersion) {
     out.push('}');
 }
 
-/// A path as text. Bytes that are not valid UTF-8 are replaced rather than
-/// dropped, so the row still names something a human can match to a file.
-///
-/// Shared with [`listing`](crate::listing), which names paths in its own JSON
-/// shape. One answer to "what does a path look like in JSON", so a directory
-/// whose name is not valid UTF-8 cannot come out replaced on one surface and
-/// dropped on the other.
+/// A path as text, invalid UTF-8 replaced. Shared with
+/// [`listing`](crate::listing) so both surfaces spell a path alike.
 pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// Shared with [`listing`](crate::listing) for the reason [`push_quoted`] is:
-/// a second writer of `"key":"value"` is a second escaper the day somebody
-/// forgets to call this one.
+/// `"key":"value"`, through the one escaper.
 pub fn push_string(out: &mut String, key: &str, value: &str) {
     let _ = write!(out, "\"{key}\":");
     push_quoted(out, value);
 }
 
-/// A string, or a JSON `null` where there is no answer. Never an empty string:
-/// "nothing was found" and "there was nothing to find" are different facts and
-/// this project does not let them share a rendering.
+/// A string, or a JSON `null` where there is no answer; never an empty string.
 pub fn push_optional(out: &mut String, key: &str, value: Option<&str>) {
     match value {
         Some(value) => push_string(out, key, value),
@@ -261,12 +208,8 @@ fn push_array(out: &mut String, key: &str, values: &[String]) {
     out.push(']');
 }
 
-/// Escapes per RFC 8259. DLL names come out of an attacker-shaped file and a
-/// Windows path can hold a backslash on any day of the week, so nothing here
-/// assumes the input is already safe to paste between quotes.
-///
-/// Shared with [`game`](crate::game), which appends its own keys to a record's
-/// line rather than growing a second escaper that would drift from this one.
+/// Escapes per RFC 8259: names come out of untrusted files. The only escaper
+/// in the crate.
 pub fn push_quoted(out: &mut String, value: &str) {
     out.push('"');
     for c in value.chars() {
@@ -330,9 +273,7 @@ mod tests {
 
     #[test]
     fn the_original_eight_keys_keep_their_place_at_the_front_of_the_line() {
-        // A harness reads them positionally, so the verdict may only append.
-        // Asserting on the prefix is what turns that from a promise into a
-        // thing that breaks the build when somebody inserts a key.
+        // Asserted on the prefix, so inserting a key breaks the build.
         let json = sample().to_json();
 
         assert!(
@@ -361,9 +302,7 @@ mod tests {
 
     #[test]
     fn a_verdict_keeps_the_provenance_of_every_signal_in_the_json() {
-        // Flattening the libraries into one array and the sources into another
-        // would let a consumer lose the pairing, and the pairing is the point:
-        // an import and a delay-import are not the same fact.
+        // An import and a delay-import are not the same fact.
         let evidence = Evidence {
             imports: Vec::new(),
             delay_imports: Vec::new(),
@@ -415,9 +354,7 @@ mod tests {
 
     #[test]
     fn backslashes_and_quotes_in_a_path_are_escaped() {
-        // Windows paths arrive with backslashes and the parser reports names
-        // straight out of the file, so unescaped output is a matter of when,
-        // not if.
+        // Backslashes and quotes arrive straight out of files.
         let mut record = sample();
         record.path = r#"C:\Games\my "game"\bin\app.exe"#.to_owned();
         record.imports = vec!["odd\tname.dll".to_owned()];

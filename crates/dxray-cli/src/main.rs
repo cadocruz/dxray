@@ -148,9 +148,7 @@ fn inspect_files(args: &InspectArgs) -> ExitCode {
 
     let mut total = 0usize;
     let mut failed = 0usize;
-    // One cache for the whole walk. It scopes itself to a directory and drops
-    // everything when the walk moves on, so a recursive scan of a library holds
-    // one folder's worth at a time rather than the tree's.
+    // One cache for the walk; it holds one directory's worth at a time.
     let mut cache = dxray_core::LibraryCache::default();
     for target in targets {
         let record = match target {
@@ -187,11 +185,8 @@ fn inspect_files(args: &InspectArgs) -> ExitCode {
     }
 }
 
-/// Ranks the executables in each directory and analyses the best of each.
-///
-/// The exit code answers the same question it always did: could everything that
-/// was asked about be read? A truncated walk fails; a ranking supported only
-/// by directory structure carries a caveat without failing the scan.
+/// Ranks the executables in each directory and analyses the best of each. A
+/// truncated walk fails the run; a ranking on structure alone does not.
 fn rank_installs(paths: &[PathBuf], json: bool, presentation: report::Presentation) -> ExitCode {
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -230,12 +225,8 @@ fn rank_installs(paths: &[PathBuf], json: bool, presentation: report::Presentati
     }
 }
 
-/// Prints one Proton build's NVAPI policy, and what it does to `appids`.
-///
-/// Exits 1 when a question that was asked did not get an answer — the script
-/// could not be read, or it holds no policy this build understands. That is a
-/// stricter rule than `steam` applies, and deliberately so: here the policy
-/// *is* what was asked about, so failing to read it is a failed run.
+/// Prints one Proton build's NVAPI policy, and what it does to `appids`. Exits
+/// 1 when the policy asked about could not be read.
 fn read_policy(target: &Path, appids: &[String]) -> ExitCode {
     let outcome = nvapi::inspect(target, appids);
 
@@ -251,44 +242,18 @@ fn read_policy(target: &Path, appids: &[String]) -> ExitCode {
     }
 }
 
-/// Prints what `launchers` have installed on this machine.
-///
-/// Both `installed` and `steam` are this function; they differ in the set of
-/// launchers they hand it and in nothing else. That is what keeps the wider
-/// flag from being a second implementation of the narrower one — the failure
-/// this project has already paid for three times.
-///
-/// Finding no installation of any launcher asked about exits 1 with a message
-/// naming the directories that were searched. An empty list and a 0 would be
-/// the same output a working scan of an empty machine produces, and the two
-/// states are not the same state: one means "you own no games", the other means
-/// "this tool did not find your launcher".
-///
-/// One launcher failing does not stop another being listed: every failure
-/// arrives as a worded problem beside the games, so a Steam whose index cannot
-/// be read still leaves the Heroic games on the screen — and still moves the
-/// exit code, because something was not read.
-///
-/// `json` chooses which of the two finished renderings is printed and changes
-/// nothing else. One scan, one set of counts, one exit code: the flag cannot
-/// alter what a run considers a failure, because the status is drawn from the
-/// listing and not from what was printed.
+/// Prints what `launchers` have installed; `installed` and `steam` differ only
+/// in the launchers they pass. Finding no installation exits 1 and names where
+/// it looked. `json` only chooses which rendering is printed.
 fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> ExitCode {
     let json = output.json;
     let found = listing::scan_with_view(launchers, output.inventory_presentation());
 
     if found.roots == 0 {
-        // Nothing was scanned, so there are no counts to report and no summary
-        // is emitted — the shape says a scan that ran ends with one. A JSON
-        // caller still gets a sentence rather than a blank stream: the same
-        // message, as one `problem` object, because an empty stdout and a
-        // machine with no games installed would otherwise look alike.
+        // Nothing scanned: no summary, but JSON callers still get a sentence.
         eprint!("{}", listing::nothing_found(launchers));
         if json {
-            // Through `write!` rather than `println!`, like every other write
-            // here: a run piped into `head` must not turn a broken pipe into a
-            // panic, and a write failure is not the caller's business and must
-            // not change the exit code.
+            // `writeln!` rather than `println!`: a broken pipe must not panic.
             let _ = writeln!(
                 std::io::stdout(),
                 "{}",
@@ -301,9 +266,7 @@ fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> E
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
     if json {
-        // One call, and the summary comes with it. There is no way to ask for
-        // the rows alone, which is what stops a run reporting games while
-        // dropping the sentence that says the scan was partial.
+        // The rows and their summary come together, never apart.
         let _ = write!(out, "{}", found.json());
     } else {
         let _ = write!(out, "{}", found.text);
@@ -311,18 +274,12 @@ fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> E
     }
     let _ = out.flush();
 
-    // The problems are repeated on stderr so that a piped run still shows them
-    // and an eyeballed one does not have to scroll back through the listing.
-    // Everything that moves the exit code is echoed here, for that reason and
-    // no other: a caveat that changes the status must be visible on the stream
-    // a script is most likely to have kept.
+    // Everything that moves the exit code is echoed on stderr too.
     for problem in found.problems.iter().chain(&found.incomplete) {
         eprintln!("dxray: {problem}");
     }
 
-    // Drawn from the same predicate the trailer is written from, so a human
-    // reading "2 game directories could not be searched in full" and a script
-    // reading the status come away with the same story about one run.
+    // The same predicate the trailer is written from.
     if found.incomplete_scan() {
         ExitCode::FAILURE
     } else {

@@ -1,29 +1,12 @@
 //! Word wrapping, shared by the listings that print sentences.
-//!
-//! Extracted when the ranked-candidate listing became the second thing in this
-//! crate that had to wrap a paragraph of prose under a label. Three lines of
-//! explanation running off the right edge of a terminal is a caveat nobody
-//! finishes reading, which defeats printing it at all.
 
-/// Wrap width, counted in characters. Terminals narrower than this exist;
-/// output that is impossible to scan on a normal one because it was built for
-/// them does not.
-///
-/// Characters and not bytes: a game title is UTF-8 and often not ASCII, and a
-/// byte count wraps a Cyrillic line twenty columns early. A wide CJK character
-/// still counts as one column, which would need a table this crate does not
-/// carry.
+/// Wrap width, in characters rather than bytes, so non-ASCII titles wrap
+/// right. A wide CJK character still counts as one.
 pub const WIDTH: usize = 80;
 
-/// Appends `text` to `out`, wrapping at [`WIDTH`] with every continuation line
-/// starting at `indent`.
-///
-/// The caller has already written whatever sits to the left of `indent` on the
-/// first line — a label, a rank — and `column` says where that left the cursor.
-///
-/// A single word longer than the space left, which is what a long path is, goes
-/// on its own line and overflows rather than being split. Half a path is not
-/// findable, and a search for it fails silently.
+/// Appends `text` to `out`, wrapping at [`WIDTH`] under `indent`. `column` is
+/// where the caller's label left the cursor. A word too long for the line, such
+/// as a path, overflows rather than being split.
 pub fn prose(out: &mut String, column: usize, indent: usize, text: &str) {
     let mut column = column;
     for (i, word) in text.split_whitespace().enumerate() {
@@ -65,9 +48,7 @@ mod tests {
 
     #[test]
     fn a_line_is_measured_in_characters_rather_than_bytes() {
-        // Two paragraphs of the same shape, seven characters a word, one ASCII
-        // and one not. Measured in bytes the Cyrillic one wraps twenty columns
-        // early and the block goes ragged against the text beside it.
+        // Cyrillic and ASCII wrap alike.
         let mut cyrillic = String::new();
         prose(&mut cyrillic, 4, 4, &"Ведьмак ".repeat(30));
         let mut latin = String::new();

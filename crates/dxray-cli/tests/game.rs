@@ -1,10 +1,5 @@
 //! `game` end to end: whole install layouts on disk, through the real binary.
-//!
-//! The unit tests in `src/game.rs` prove the listing renders what it is given.
-//! These prove the walk, the ranking and the analysis line up behind one
-//! command, and they assert **order** — a run that contains the shipping binary
-//! somewhere below the crash handler has failed even though every name is
-//! present.
+//! The assertions are about order.
 
 mod common;
 
@@ -17,9 +12,8 @@ fn position(text: &str, needle: &str) -> usize {
         .unwrap_or_else(|| panic!("{needle} is missing from:\n{text}"))
 }
 
-/// An Unreal install: a launcher at the root, the shipping binary four
-/// directories down with its upscalers beside it, the engine's crash reporter,
-/// and two installers nobody removed.
+/// An Unreal install: a root launcher, the shipping binary four levels down
+/// beside its upscalers, a crash reporter and two installers.
 fn unreal(dir: &TempDir) {
     dir.write(
         "FactoryGame.exe",
@@ -70,9 +64,7 @@ fn the_shipping_binary_leads_the_ranking_and_is_the_one_that_gets_analysed() {
 
 #[test]
 fn every_executable_is_listed_with_its_score_and_not_only_the_winner() {
-    // Rank and explain, do not pick. The launcher and the game are both
-    // legitimate answers to different questions, and a tool that names one and
-    // hides the other is lying by omission.
+    // Everything is ranked and explained; nothing is hidden.
     let dir = TempDir::new("game-listed");
     unreal(&dir);
 
@@ -98,9 +90,7 @@ fn every_executable_is_listed_with_its_score_and_not_only_the_winner() {
 
 #[test]
 fn a_unity_stub_beats_the_crash_handler_that_shares_every_file_it_has() {
-    // The Unity `.exe` imports no graphics API — `UnityPlayer.dll` does the
-    // drawing — so the strongest signal is silent and the layout has to carry
-    // it. The handler sits in the same directory and shares its neighbours.
+    // Unity's stub outranks the handler that shares its directory.
     let dir = TempDir::new("game-unity");
     dir.write(
         "Cuphead.exe",
@@ -139,9 +129,7 @@ fn a_unity_stub_beats_the_crash_handler_that_shares_every_file_it_has() {
 
 #[test]
 fn a_directory_of_installers_is_reported_as_holding_no_game_and_still_exits_zero() {
-    // `vcredist_x64.exe` sinks because it has nothing to say for itself, not
-    // because it is on a list of names. Finding no game is an answer, not a
-    // failure: the directory was read and this is what is in it.
+    // A redistributable sinks for lack of evidence; finding no game exits 0.
     let dir = TempDir::new("game-redist");
     dir.write(
         "vcredist_x64.exe",
@@ -172,10 +160,7 @@ fn a_directory_of_installers_is_reported_as_holding_no_game_and_still_exits_zero
 
 #[test]
 fn a_game_whose_renderer_loads_at_run_time_is_ranked_and_the_listing_says_why_that_is_thin() {
-    // Java, Electron and .NET games import no graphics API: the runtime loads
-    // it with LoadLibrary long after startup. The ranking still works off the
-    // structure, and it must not be printed as confidently as one an import
-    // table stands behind.
+    // A game with no graphics import is ranked on structure, and said so.
     let dir = TempDir::new("game-java");
     dir.write(
         "ProjectZomboid64.exe",
@@ -242,9 +227,7 @@ fn the_json_line_appends_the_ranking_without_disturbing_the_frozen_keys() {
 
 #[test]
 fn a_directory_with_no_executable_in_it_fails_rather_than_printing_a_blank_ranking() {
-    // The question asked was which executable here is the game, and there is no
-    // executable to answer with. In `steam`, which sweeps a whole machine and
-    // meets games that are mid-download, the same state costs nothing.
+    // No executable at all fails `game`, unlike `steam`.
     let dir = TempDir::new("game-empty");
     dir.write("readme.txt", b"nothing to see");
 
@@ -289,10 +272,7 @@ fn game_rejects_recursive_scan_option() {
 
 #[test]
 fn a_walk_that_stopped_at_its_limit_moves_the_exit_code_as_well_as_printing_a_note() {
-    // The note explaining that the real binary may be below the limit is on
-    // stdout, where a script never reads it. The exit code has always answered
-    // one question — was everything read — and a bounded walk that hit its
-    // bound did not read everything.
+    // A truncated walk exits 1.
     let dir = TempDir::new("game-deep");
     dir.write(
         "launcher.exe",
@@ -327,9 +307,7 @@ fn a_walk_that_stopped_at_its_limit_moves_the_exit_code_as_well_as_printing_a_no
 
 #[test]
 fn a_thin_but_complete_answer_still_exits_zero() {
-    // The other side of the same line. Everything was read; the ranking rests
-    // on structure because the binaries import no renderer, and that is a
-    // finding rather than a failure.
+    // Structure-only because nothing imports a renderer: exit 0.
     let dir = TempDir::new("game-thin");
     dir.write(
         "ProjectZomboid64.exe",
@@ -348,12 +326,7 @@ fn a_thin_but_complete_answer_still_exits_zero() {
 
 #[test]
 fn a_tie_for_first_place_is_declared_rather_than_settled_by_the_alphabet() {
-    // Importing a renderer is not a games-only signal: an Electron main process
-    // does it as a matter of course, and so does at least one shipped security
-    // product. Beside a game whose only evidence is its own import, such a
-    // binary ties at 100 and the top slot goes to whichever sorts first. The
-    // numbers alone read exactly as confident as a correct answer, so the
-    // listing has to say that the order was not the evidence's doing.
+    // A tie at the top is said to be one.
     let dir = TempDir::new("game-tie");
     dir.write(
         "Fortress.exe",

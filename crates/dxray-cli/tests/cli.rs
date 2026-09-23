@@ -1,18 +1,12 @@
-//! End to end tests: the real binary, real files, real exit codes.
-//!
-//! The JSON is checked as text rather than through a parser, because the thing
-//! being promised is the byte shape of the line — key order included — and a
-//! parser would accept a line that broke that promise.
+//! End to end tests: the real binary, real files, real exit codes. JSON is
+//! checked as text, since the promise is its byte shape.
 
 mod common;
 
 use common::{Image, TempDir, dxray, stdout_of};
 
-/// The thirteen keys, in order, as they must appear in every line.
-///
-/// The first eight are frozen: a harness reads them positionally, so the
-/// verdict keys were appended after `error` rather than filed where they would
-/// read best.
+/// The thirteen keys, in order. The first eight are frozen: harnesses read
+/// them positionally.
 const KEYS: [&str; 13] = [
     "\"path\":",
     "\"machine\":",
@@ -88,10 +82,7 @@ fn a_parsed_image_is_reported_as_one_json_line_with_the_promised_keys() {
 
 #[test]
 fn a_binary_that_links_two_renderers_reports_both_and_names_its_proxy_dll() {
-    // The end-to-end version of the two cases most likely to be got wrong: a
-    // set of renderers rather than a single winner, and a system DLL sitting in
-    // the directory as a file, which is an injector and not a renderer signal.
-    // Only this level exercises the real directory listing.
+    // A set of renderers, and a system DLL file read as an injector.
     let dir = TempDir::new("verdict");
     let path = dir.write(
         "game.exe",
@@ -122,9 +113,7 @@ fn a_binary_that_links_two_renderers_reports_both_and_names_its_proxy_dll() {
         ),
         "the proxy DLL is reported as one, got {text}"
     );
-    // The fixture is deliberately not a PE image, and the version says exactly
-    // that rather than "no version": something is sitting there under a name
-    // Windows owns, and this could not say what it is.
+    // A non-PE file under a system name says it could not be read.
     assert!(
         text.contains(r#""infrastructure":[]"#),
         "a dxgi file is not a dxgi import, got {text}"
@@ -154,9 +143,7 @@ fn a_32_bit_image_reports_32_bits_rather_than_defaulting() {
 
 #[test]
 fn a_file_that_cannot_be_parsed_does_not_stop_the_ones_after_it() {
-    // The reason this matters: a scan of a game directory always meets
-    // something that is not a PE, and a run that stops there reports nothing
-    // about the binaries that came later.
+    // A file that is not a PE does not stop the run.
     let dir = TempDir::new("continue");
     let first = dir.write("a.dll", &Image::x64().importing(&["dxgi.dll"]).build());
     let broken = dir.write("b.dll", b"this is not a PE image at all");
@@ -386,15 +373,8 @@ fn json_output_carries_no_header_footer_or_blank_line() {
 
 #[test]
 fn a_usage_error_exits_2_and_is_told_apart_from_a_file_that_failed() {
-    // Three outcomes, three codes, on purpose. 0 is "every file parsed", 1 is
-    // "some file did not", and 2 is "the command line was wrong and nothing
-    // was scanned at all".
-    //
-    // Collapsing 2 into 1 is the tempting simplification and it is the wrong
-    // one: a script that mistypes a flag would then report exactly what a
-    // corrupt game executable reports, and the caller would go looking for a
-    // bad binary that does not exist. Asserting only "not 0" here would let
-    // that change land silently, which is why this pins the number.
+    // 0 every file parsed, 1 some did not, 2 bad command line. A mistyped flag
+    // must not look like a corrupt binary.
     let out = dxray(Vec::<String>::new());
 
     assert_eq!(out.status.code(), Some(2), "no arguments is a usage error");
@@ -402,10 +382,7 @@ fn a_usage_error_exits_2_and_is_told_apart_from_a_file_that_failed() {
 
 #[test]
 fn a_shipped_dlss_runtime_is_reported_with_the_build_it_is() {
-    // The question this whole feature exists for, asked of the real binary.
-    // `nvngx_dlss.dll` is called that in every version ever shipped, so a line
-    // reading "DLSS Super Resolution  nvngx_dlss.dll (neighbour)" answers
-    // nothing at all for a person deciding whether to swap the file.
+    // DLSS rows carry the version: the file name is always the same.
     let dir = TempDir::new("dlss");
     let path = dir.write(
         "game.exe",
@@ -441,18 +418,8 @@ fn a_shipped_dlss_runtime_is_reported_with_the_build_it_is() {
 
 #[test]
 fn the_dlss_5_runtime_reaches_the_printed_report_like_any_other_library() {
-    // The name `dxray` did not know, asked of a real directory through the real
-    // binary. Before this, a folder with DLSS 5 in it printed its three older
-    // runtimes and nothing about the file that makes it a DLSS 5 folder — a
-    // confident-looking answer with a hole in it.
-    //
-    // The classification lives in `dxray-core` and this test is in the CLI
-    // crate on purpose: deleting the row there has to take this line with it,
-    // or "one table decides what a DLL is" is a claim nobody is checking.
-    //
-    // `310.8.0.0` is the version the shipped runtime is reported to carry, and
-    // it is *not* evidence that the file is NVIDIA's build: the community's
-    // patched variants carry the same resource. The line says what is there.
+    // DLSS 5 is reported through the real binary. The version is not proof the
+    // file is NVIDIA's: patched variants carry it too.
     let dir = TempDir::new("dlssnr");
     let path = dir.write(
         "game.exe",
@@ -488,9 +455,7 @@ fn the_dlss_5_runtime_reaches_the_printed_report_like_any_other_library() {
 
 #[test]
 fn a_version_resource_of_all_zeroes_prints_as_a_number_rather_than_vanishing() {
-    // Twenty-one files on one ordinary Windows install carry a resource that is
-    // present and all zeroes. `dxray-pe` reports them as the number they are;
-    // the two layers above it must not quietly undo that on the way out.
+    // An all-zero version resource is printed as the number it is.
     let dir = TempDir::new("zeroes");
     let path = dir.write(
         "game.exe",
@@ -511,10 +476,7 @@ fn a_version_resource_of_all_zeroes_prints_as_a_number_rather_than_vanishing() {
 
 #[test]
 fn a_local_library_with_no_version_resource_says_so_rather_than_staying_silent() {
-    // "No version" is a fact about the file somebody shipped; "no local copy"
-    // is a fact about the directory. Both are printed, because a state that
-    // prints nothing is indistinguishable from an annotation somebody forgot,
-    // and telling these two apart is the whole reason they are two states.
+    // "No version" and "no local copy" are both printed.
     let dir = TempDir::new("unstamped");
     let path = dir.write(
         "game.exe",

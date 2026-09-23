@@ -1,16 +1,11 @@
-//! The `config_info` contents below are the shape Proton's own source writes:
-//! a version, then the directories of the build that ran the prefix, then a
-//! handful of booleans. What matters to this module is only the directory
-//! lines, so the fixtures keep those and enough of the rest to prove the others
-//! are ignored rather than tripped over.
+//! `config_info` fixtures in the shape Proton writes; only the directory
+//! lines matter, the rest proves they are ignored.
 
 use super::{Error, compatdata, for_game, from_prefix, resolve, script_in};
 use crate::testutil::TempDir;
 use std::path::Path;
 
-/// A Steam-and-Proton-shaped tree. Everything these tests believe about the
-/// real layout is written here once, so a reader can check the assumption in
-/// one place instead of in ten.
+/// A Steam-and-Proton-shaped tree, the layout written down once.
 struct Install(TempDir);
 
 impl Install {
@@ -56,9 +51,7 @@ fn config_info(root: &str, dist: &str) -> String {
 
 #[test]
 fn the_build_a_prefix_last_ran_under_is_read_out_of_its_config_info() {
-    // The whole point of the module: a game's appid is not enough to answer the
-    // NVAPI question, because the answer depends on which Proton ran it, and
-    // this file is where that is written down.
+    // `config_info` names the build that ran the game.
     let install = Install::new("proton-files");
     let root = install.proton("Proton 9.0", "files");
     install.prefix(570, &config_info(&root, "files"));
@@ -70,11 +63,7 @@ fn the_build_a_prefix_last_ran_under_is_read_out_of_its_config_info() {
 
 #[test]
 fn the_older_dist_spelling_resolves_just_as_the_current_files_one_does() {
-    // Proton 8.0 and everything before it unpacked into `dist/`; 9.0 renamed it
-    // to `files/`. A resolver that knows only the new name identifies no prefix
-    // last run under 8.0 — and 8.0 is the release whose policy runs the *other*
-    // way round, so those are the prefixes where failing to identify the build
-    // costs the most.
+    // Proton 8.0 and older unpack into `dist/`; 9.0 renamed it `files/`.
     let install = Install::new("proton-dist");
     let root = install.proton("Proton 8.0", "dist");
     install.prefix(570, &config_info(&root, "dist"));
@@ -86,9 +75,7 @@ fn the_older_dist_spelling_resolves_just_as_the_current_files_one_does() {
 
 #[test]
 fn a_game_that_has_never_run_under_proton_is_not_reported_as_a_failure() {
-    // Most of a Steam library is in this state at any moment. Counting it as
-    // something that went wrong would report a healthy machine as a broken
-    // scan, so it gets its own variant and its own predicate.
+    // A prefix never launched is its own state, not an error.
     let install = Install::new("proton-none");
     install.proton("Proton 9.0", "files");
 
@@ -103,10 +90,7 @@ fn a_game_that_has_never_run_under_proton_is_not_reported_as_a_failure() {
 
 #[test]
 fn a_build_that_has_been_uninstalled_says_so_instead_of_shrugging() {
-    // A prefix outlives the Proton that made it: a build that was deleted or
-    // renamed leaves a `config_info` pointing at nothing. "The build could not
-    // be identified" sends a person looking for a parsing bug; naming the
-    // directory that is gone tells them what actually happened.
+    // A deleted build is named, not reported as a parse failure.
     let install = Install::new("proton-gone");
     install.prefix(
         570,
@@ -141,9 +125,7 @@ fn a_config_info_that_names_no_proton_at_all_is_told_apart_from_one_that_names_a
 
 #[test]
 fn a_prefix_that_names_two_different_protons_is_refused_rather_than_resolved() {
-    // A prefix belongs to one build. Two means the file is not what this code
-    // believes it is, and picking the first would report a policy the game
-    // never ran under — a confident answer drawn from the wrong script.
+    // Two builds in one prefix is refused.
     let install = Install::new("proton-two");
     let nine = install.proton("Proton 9.0", "files");
     let ten = install.proton("Proton 10.0", "files");
@@ -160,9 +142,7 @@ fn a_prefix_that_names_two_different_protons_is_refused_rather_than_resolved() {
 
 #[test]
 fn one_build_named_by_several_lines_is_still_one_build() {
-    // A real `config_info` names the same root three or four times over — its
-    // fonts, its libraries, its template prefix. Treating those as different
-    // builds would refuse every healthy prefix on every machine.
+    // The same root repeated is one build.
     let install = Install::new("proton-repeat");
     let root = install.proton("Proton 9.0", "files");
     install.prefix(570, &config_info(&root, "files"));
@@ -172,10 +152,7 @@ fn one_build_named_by_several_lines_is_still_one_build() {
 
 #[test]
 fn a_line_that_could_be_cut_in_two_places_is_settled_by_looking_for_the_script() {
-    // A person whose directory is called `files` produces two candidate roots
-    // from one line. Which cut is the real boundary is not decided by picking
-    // an occurrence; it is decided by which candidate has a `proton` in it,
-    // because that is evidence and the other is a guess.
+    // Of two candidate roots, the one holding `proton` wins.
     let install = Install::new("proton-ambiguous-cut");
     let root = install.proton("files/Proton 9.0", "files");
     install.prefix(570, &config_info(&root, "files"));
@@ -187,9 +164,7 @@ fn a_line_that_could_be_cut_in_two_places_is_settled_by_looking_for_the_script()
 
 #[test]
 fn a_directory_and_the_script_inside_it_are_both_accepted_as_a_proton() {
-    // The directory is what Steam shows in a library listing; the script is
-    // what a path copied out of a `config_info` points at. Both are things a
-    // person has in front of them.
+    // A build directory or its script both resolve.
     let install = Install::new("proton-resolve");
     let root = install.proton("Proton 9.0", "files");
     let script = Path::new(&root).join(SCRIPT);
@@ -200,9 +175,7 @@ fn a_directory_and_the_script_inside_it_are_both_accepted_as_a_proton() {
 
 #[test]
 fn a_directory_with_no_launcher_in_it_is_not_a_proton_install() {
-    // Otherwise `--nvapi <some folder>` would go on to report that the folder
-    // has no policy, which reads as a fact about Proton rather than about the
-    // path that was typed.
+    // A folder with no `proton` is refused.
     let dir = TempDir::new("proton-empty");
 
     assert!(script_in(dir.path()).is_none());
@@ -224,9 +197,7 @@ fn the_prefix_path_is_built_where_steam_puts_it() {
 
 #[test]
 fn a_prefix_directory_with_no_config_info_in_it_reports_the_file_it_wanted() {
-    // A half-built prefix, or one from a Proton that failed early. Still "no
-    // build recorded here", but the path in the message is the file rather than
-    // the directory, so a person can see the difference.
+    // A half-built prefix names the file that is missing.
     let install = Install::new("proton-halfbuilt");
     install.0.dir("steamapps/compatdata/570/pfx");
 
@@ -242,9 +213,7 @@ fn a_prefix_directory_with_no_config_info_in_it_reports_the_file_it_wanted() {
 
 #[test]
 fn a_game_with_no_prefix_is_a_sentence_rather_than_an_error() {
-    // The ordinary state of most of a real library: owned, installed, never
-    // launched under Proton. A row that said "error" about it would put a
-    // hundred red lines on a screen where nothing is wrong.
+    // A game never launched under Proton is not an error.
     let answer = super::Builds::default().answer(None, Path::new("/definitely/not/here"), 440);
 
     assert!(
@@ -264,10 +233,7 @@ fn a_game_with_no_prefix_is_a_sentence_rather_than_an_error() {
 
 #[test]
 fn one_cache_serves_both_the_listing_and_the_detail_pane() {
-    // The two binaries kept a copy of this each, and the copies were free to
-    // drift: one carried the condition's source lines and the other did not.
-    // They now share the answer and differ only in what they choose to print,
-    // which is a rendering decision rather than a data one.
+    // One answer for both binaries; only rendering differs.
     let answer = super::Builds::default().answer(None, Path::new("/definitely/not/here"), 440);
 
     assert!(

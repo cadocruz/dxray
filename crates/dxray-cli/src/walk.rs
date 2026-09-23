@@ -1,9 +1,5 @@
-//! Turns the command line arguments into the list of files to inspect.
-//!
-//! Anything that goes wrong here — an unreadable directory, a path that is not
-//! there — becomes a record like any other. The run never stops early, because
-//! a scan of a game library that gives up on the first permission error is a
-//! scan that reports the wrong answer for everything after it.
+//! Turns the command line into the files to inspect. A failure becomes a
+//! record like any other; the run never stops early.
 
 use std::path::{Path, PathBuf};
 
@@ -15,12 +11,8 @@ pub enum Target {
     Failed(Box<Record>),
 }
 
-/// Expands `inputs` into the files to inspect, in argument order.
-///
-/// A path given on the command line is taken as a file whatever its name, so
-/// `dxray weird-thing` inspects it rather than skipping it. Only the contents
-/// of a directory are filtered by extension, because there the name is the only
-/// thing that distinguishes a binary from the rest of an install.
+/// Expands `inputs` into the files to inspect, in argument order. A named path
+/// is always inspected; only directory contents are filtered by extension.
 pub fn collect(inputs: &[PathBuf], recursive: bool) -> Vec<Target> {
     let mut targets = Vec::new();
     for input in inputs {
@@ -46,9 +38,7 @@ fn walk(root: &Path, recursive: bool, out: &mut Vec<Target>) {
             }
         };
 
-        // Collected and sorted before being emitted: the order the filesystem
-        // hands entries back is not stable between runs or machines, and output
-        // that reorders itself cannot be diffed against a previous scan.
+        // Sorted, so output can be diffed between runs.
         let mut files = Vec::new();
         let mut subdirectories = Vec::new();
         for entry in entries {
@@ -88,9 +78,7 @@ fn walk(root: &Path, recursive: bool, out: &mut Vec<Target>) {
     }
 }
 
-/// True for the extensions a PE image is shipped under. Matched without regard
-/// to case, since a Windows filesystem treats `.DLL` and `.dll` as the same
-/// name and an install tree contains both spellings.
+/// True for the extensions a PE image ships under, in any case.
 fn is_image(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("dll"))

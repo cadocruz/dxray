@@ -1,13 +1,6 @@
-//! What the unification is allowed to cost, and what it is not.
-//!
-//! Most of the first half are about the third difference: Steam games can be
-//! asked a Proton question and Heroic games cannot, and a model that loses
-//! either half of that is worse than the two types it replaced.
-//!
-//! The second half are about [`walk`], which is the traversal both consumers
-//! react to. What it promises is the order things are announced in and the
-//! libraries it declines to visit twice — each of which used to be a copy in
-//! each consumer, free to drift.
+//! What the launcher model must keep: only Steam games can be asked a Proton
+//! question. Then [`walk`]: the order it announces things in, and the
+//! libraries it will not visit twice.
 
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -85,10 +78,7 @@ fn a_heroic_game_is_told_the_proton_question_does_not_apply_rather_than_answered
 
 #[test]
 fn a_heroic_id_cannot_become_a_steam_appid_even_when_it_is_all_digits() {
-    // The failure this enum exists to prevent. A GOG id is frequently a run of
-    // digits, and a model that carried `appid: u32` with a zero for Heroic — or
-    // that parsed the string — would hand this game a real Proton verdict read
-    // off some unrelated Steam application's prefix.
+    // A numeric GOG id must never become a Steam appid.
     let game = heroic_game("1207658691");
     assert_eq!(
         game.identity.steam_appid(),
@@ -121,9 +111,7 @@ fn zero_is_a_steam_appid_like_any_other_and_not_a_marker_for_absence() {
 
 #[test]
 fn every_heroic_backend_reports_one_launcher_key_and_its_own_label() {
-    // A dedup key wants to know which scanner found a directory, because the
-    // same install can be listed by two backends; a person wants to know which
-    // shop it came from.
+    // Both the scanner that found a directory and the shop it came from.
     for store in [
         heroic::Store::Epic,
         heroic::Store::Gog,
@@ -157,10 +145,7 @@ fn the_registry_holds_every_launcher_compiled_in_and_names_them_apart() {
 
 #[test]
 fn a_heroic_root_reports_itself_as_its_one_library() {
-    // Difference one: Steam has a library level and Heroic does not. Kept
-    // rather than flattened, because the library is what a compatdata prefix
-    // sits beside — and Heroic's answer is the real directory its records came
-    // out of, not a placeholder.
+    // Heroic's library is the real directory its records came from.
     let root = TempDir::new("launcher-heroic-library");
     let libraries = Heroic.libraries(root.path());
     assert_eq!(
@@ -176,9 +161,7 @@ fn a_heroic_root_reports_itself_as_its_one_library() {
 
 #[test]
 fn a_steam_root_that_cannot_be_read_yields_no_libraries_and_one_problem() {
-    // Difference two: Steam's wholesale failure has to land somewhere in a
-    // shape that has no `Result`. It lands on `problems`, which is where both
-    // consumers were already putting it.
+    // A Steam index failure lands on `problems`.
     let root = TempDir::new("launcher-steam-bad-index");
     root.dir("steamapps");
     root.write("steamapps/libraryfolders.vdf", "\"libraryfolders\"\n{\n}\n");
@@ -233,9 +216,7 @@ fn a_steam_library_comes_back_through_the_trait_with_its_appids_intact() {
 
 #[test]
 fn a_scan_can_be_written_once_over_every_launcher() {
-    // The whole point: this loop names neither launcher, and gaining a third
-    // one changes nothing in it. It is written here rather than only in a
-    // consumer so the trait is proved object-safe and usable as one.
+    // A loop that names neither launcher; the trait is object-safe.
     let root = TempDir::new("launcher-uniform-scan");
 
     let mut seen = Vec::new();
@@ -269,17 +250,9 @@ fn an_origin_prints_its_label_and_an_identity_prints_what_the_launcher_calls_it(
     );
 }
 
-/// The one sequence everything the walk does lands in, shared by the visitor
-/// and the launcher it walks.
-///
-/// Shared rather than owned by [`Transcript`], because half of what [`walk`]
-/// promises is where a call that is *not* a visitor call sits among the ones
-/// that are. A launcher that recorded its reads in a list of its own would
-/// prove they happened and say nothing about when.
-///
-/// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>` because [`Launcher`] is `Sync`,
-/// which is what lets [`all`] hand out trait objects a scan can share. A fake
-/// that was not `Sync` could not implement the trait at all.
+/// The one sequence the visitor and the fake launcher both record into, so a
+/// read's position among the visitor calls is observable. `Arc<Mutex<_>>`
+/// because [`Launcher`] is `Sync`.
 #[derive(Clone, Default)]
 struct Log(Arc<Mutex<Vec<String>>>);
 
@@ -296,11 +269,8 @@ impl Log {
     }
 }
 
-/// Records what the walk announced, in order, as one flat transcript.
-///
-/// Flat on purpose: the order the events arrive in is half of what [`walk`]
-/// promises, and a test that sorted them into buckets would pass on a traversal
-/// that announced a library after reading it.
+/// Records what the walk announced, in order, flat: order is half of what
+/// [`walk`] promises.
 #[derive(Default)]
 struct Transcript {
     log: Log,
@@ -373,10 +343,7 @@ struct Fake {
 }
 
 impl Fake {
-    /// The transcript is required rather than optional. The read is the only
-    /// expensive thing the walk does and the only call whose position the
-    /// consumers depend on, and a fake that could be built without it would
-    /// leave that position unobservable by default.
+    /// The transcript is required, so the read is always observable.
     fn new(key: &'static str, roots: &[&str], transcript: &Transcript) -> Self {
         Self {
             origin: Origin::new(key, key),
@@ -419,13 +386,8 @@ impl Launcher for Fake {
         }
     }
 
-    /// Records the read into the transcript before answering.
-    ///
-    /// This is the disk access the walk's announcement order exists to let a
-    /// consumer overlap with. It is written into the same sequence the visitor
-    /// calls go into so a test can assert it happened *between* them; with the
-    /// read invisible, folding the announcement into the read would leave the
-    /// two visitor calls in the same order and every transcript unchanged.
+    /// Records the read into the transcript before answering, so a test can
+    /// see it land between visitor calls.
     fn games(&self, library: &Path) -> Catalogue {
         self.log
             .push(format!("read {} {}", self.origin.key(), library.display()));
@@ -435,16 +397,8 @@ impl Launcher for Fake {
 
 #[test]
 fn the_walk_announces_a_library_before_it_reads_it() {
-    // Not cosmetic. Reading a library takes as long as the disk it is on, and a
-    // consumer that fills a list as it goes has to be able to show the header
-    // while the read is running. Announcing and cataloguing in one call would
-    // have turned a progressive fill into a series of stalls, and nothing about
-    // the output would have said so.
-    //
-    // The read is in the transcript for that reason. Asserting only that the
-    // visitor was told "library" before "catalogue" would pass on a walk that
-    // did the read first and announced afterwards, which is exactly the stall
-    // this is about.
+    // The library is announced before it is read, so a consumer can show the
+    // header while the disk works.
     let mut transcript = Transcript::default();
     let launcher = Fake::new("only", &["/dxray-walk-root"], &transcript);
 
@@ -465,9 +419,7 @@ fn the_walk_announces_a_library_before_it_reads_it() {
 
 #[test]
 fn notes_and_problems_are_announced_before_the_libraries_they_qualify() {
-    // A caveat explaining why there is only one library has to be readable
-    // above it. Printed after, it is a footnote to a list the reader has
-    // already drawn conclusions from.
+    // Notes come before the library they explain.
     let mut transcript = Transcript::default();
     let mut launcher = Fake::new("only", &["/dxray-walk-noted"], &transcript);
     launcher
@@ -497,14 +449,8 @@ fn notes_and_problems_are_announced_before_the_libraries_they_qualify() {
 
 #[test]
 fn one_library_named_by_two_installs_is_walked_once_and_both_installs_are_kept() {
-    // The rule each consumer used to carry its own copy of. A native and a
-    // Flatpak Steam usually name the same library, and so can two launchers;
-    // walking it twice prints every game in it twice, which reads as two copies
-    // installed rather than as one counted twice.
-    //
-    // Roots are deliberately not deduplicated the same way: two installs that
-    // share a library are still two installs, and their notes and failures
-    // belong to each of them.
+    // A library named twice is walked once. Roots are not deduplicated: two
+    // installs sharing a library are still two installs.
     let mut transcript = Transcript::default();
     let first =
         Fake::new("first", &["/dxray-walk-a"], &transcript).holding(&["/dxray-walk-shared"]);
@@ -545,10 +491,7 @@ fn one_library_named_by_two_installs_is_walked_once_and_both_installs_are_kept()
 
 #[test]
 fn a_visitor_that_breaks_stops_the_walk_where_it_asked_to() {
-    // Cancellation is a visitor's business and not a parameter: a consumer that
-    // can be cancelled polls its own flag and breaks, and one that cannot never
-    // writes the word. That is what makes the second kind cost nothing, rather
-    // than pass a flag that is always false.
+    // Cancellation is the visitor's: it breaks, and the walk stops.
     let mut transcript = Transcript {
         budget: Some(1),
         ..Transcript::default()
@@ -578,10 +521,7 @@ fn a_visitor_that_breaks_stops_the_walk_where_it_asked_to() {
 
 #[test]
 fn the_walk_names_no_launcher_and_gains_one_without_being_edited() {
-    // The extension point, proved rather than asserted in a comment: a launcher
-    // the traversal has never heard of is walked, and every message it produces
-    // is prefixed from its own origin. A branch here would be right until
-    // somebody added the third launcher.
+    // An unknown launcher is walked, its messages prefixed from its own origin.
     let mut transcript = Transcript::default();
     let newcomer = Fake::new("newcomer", &["/dxray-walk-new"], &transcript);
 
@@ -599,9 +539,7 @@ fn the_walk_names_no_launcher_and_gains_one_without_being_edited() {
 
 #[test]
 fn every_launcher_in_the_registry_can_say_where_it_looked() {
-    // Required rather than defaulted, because a launcher that answered nothing
-    // would vanish from the "nothing found" message — the answer would be short
-    // and nothing would say so, which is the defect one layer up.
+    // Every launcher says where it looked.
     for launcher in all() {
         assert!(
             !launcher.candidate_roots().is_empty(),

@@ -1,12 +1,6 @@
-//! End to end tests for `nvapi`, and for the NVAPI rows `steam` grew: the
-//! real binary, a fake Proton install, real exit codes.
-//!
-//! The scripts below are cut down from real Proton releases and keep the shapes
-//! that matter — the two levels of nesting the policy lives at, the comments
-//! Valve writes beside every application id, and the `/proc/modules` block
-//! Proton 10.0 introduced. There is no Proton on the machine these were written
-//! on, so what they prove is that the reader handles those shapes, not that a
-//! real install is laid out the way the resolver believes.
+//! End to end tests for `nvapi`, and the NVAPI rows under `steam`: the real
+//! binary, a fake Proton install, real exit codes. The scripts are cut down
+//! from real Proton releases.
 
 mod common;
 
@@ -59,9 +53,8 @@ const NO_POLICY: &str = r#"def default_compat_config():
     return ret
 "#;
 
-/// The same absence for a different reason: the flag is set by a shape this
-/// reader does not model, so the policy may be entirely in the part it could
-/// not read.
+/// A flag set by a shape this reader does not model, so the policy may be in
+/// the unread part.
 const UNREADABLE: &str = r#"def default_compat_config():
     ret = set()
     if appid in ["1088850"]:
@@ -111,10 +104,7 @@ fn unwrapped(output: &std::process::Output) -> String {
 
 #[test]
 fn a_policy_is_reported_with_the_evidence_behind_it_and_not_just_a_list() {
-    // The evidence comes first and the answers after it, in that order. "This
-    // game is not in the list" is worth one thing when fifteen lists were read
-    // and nothing at all when the function was never found, and a listing that
-    // printed the answer alone would be hiding the only line that says which.
+    // The evidence first, then the answers.
     let dir = TempDir::new("nvapi-deny");
     let root = proton(&dir, "Proton 9.0", DENY);
 
@@ -158,10 +148,7 @@ fn a_listed_game_and_an_unlisted_one_get_opposite_answers_from_one_build() {
 
 #[test]
 fn the_same_silence_means_the_opposite_thing_on_a_build_from_the_inverted_era() {
-    // Proton 6.3 to 8.0 list the games that *get* NVAPI. A reader that knew
-    // only `disablenvapi`, found none, and answered "not in the list, so NVAPI
-    // is on" would get every game on those releases backwards. This is the
-    // assertion that the two eras cannot collapse into each other.
+    // Proton 6.3 to 8.0 list the games that get NVAPI.
     let dir = TempDir::new("nvapi-allow");
     let root = proton(&dir, "Proton 8.0", ALLOW);
 
@@ -191,11 +178,7 @@ fn the_same_silence_means_the_opposite_thing_on_a_build_from_the_inverted_era() 
 
 #[test]
 fn a_conditional_block_prints_the_condition_rather_than_resolving_it() {
-    // Proton 10.0 onwards disables NVAPI for these games only when no NVIDIA
-    // driver is loaded — which on the machines this tool is for means they keep
-    // it. Resolving that here would make the answer depend on where dxray runs
-    // instead of on what Proton will do, so the block is quoted back and the
-    // reader applies it.
+    // Proton 10.0's driver condition is quoted back, not resolved.
     let dir = TempDir::new("nvapi-conditional");
     let root = proton(&dir, "Proton 10.0", DENY);
 
@@ -222,10 +205,7 @@ fn a_conditional_block_prints_the_condition_rather_than_resolving_it() {
 
 #[test]
 fn a_test_wrapped_around_a_flat_block_is_printed_rather_than_waved_through() {
-    // The block here is the plain, outright shape with one extra test round it.
-    // Reading it as unconditional prints a confident "NVAPI is withheld" for a
-    // game whose fate is gated on something that was never looked at, with
-    // nothing in the output to say the test exists.
+    // An extra test around the block makes it a condition.
     let dir = TempDir::new("nvapi-wrapped");
     let root = proton(&dir, "Proton 11.0", WRAPPED);
 
@@ -254,10 +234,7 @@ fn a_test_wrapped_around_a_flat_block_is_printed_rather_than_waved_through() {
 
 #[test]
 fn a_build_read_in_full_with_no_nvapi_policy_is_a_finding_and_exits_zero() {
-    // Proton 7.0 really is like this. The function is there, real appid lists
-    // parse out of it, and none of them touches NVAPI. That is an answer about
-    // the build — being this game changes nothing — and a caller that exited 1
-    // for it would be calling a complete reading a failed one.
+    // Proton 7.0: no list touches NVAPI, and that is a complete reading.
     let dir = TempDir::new("nvapi-truenegative");
     let root = proton(&dir, "Proton 7.0", NO_POLICY);
 
@@ -271,10 +248,7 @@ fn a_build_read_in_full_with_no_nvapi_policy_is_a_finding_and_exits_zero() {
 
 #[test]
 fn a_build_whose_policy_could_not_be_read_is_not_that_same_answer() {
-    // The pair that matters. Both scripts yield no NVAPI site. One was read in
-    // full; in the other the policy may be entirely inside the part that was
-    // refused. They must differ in the sentence *and* in the exit code, or a
-    // release whose policy moved reads as a release that has none.
+    // Read in full versus partly refused: different sentence and exit code.
     let dir = TempDir::new("nvapi-hidden");
     let root = proton(&dir, "Proton 11.0", UNREADABLE);
 
@@ -294,9 +268,7 @@ fn a_build_whose_policy_could_not_be_read_is_not_that_same_answer() {
 
 #[test]
 fn a_build_with_nvapi_lists_and_no_direction_does_not_deny_the_lists_it_just_printed() {
-    // A `forcenvapi` list and nothing else. Printing the list and then claiming
-    // no list touches NVAPI is a report contradicting itself three lines apart,
-    // which costs the whole output its credibility.
+    // A `forcenvapi`-only build never claims no list touches NVAPI.
     let dir = TempDir::new("nvapi-forceonly");
     let root = proton(&dir, "Proton 9.0", FORCE_ONLY);
 
@@ -338,9 +310,7 @@ fn a_file_that_defeats_the_reader_is_named_once_and_not_twice() {
 
 #[test]
 fn a_directory_that_is_not_a_proton_says_so_rather_than_reporting_an_empty_policy() {
-    // Otherwise `nvapi ~/Downloads` reports that the folder withholds NVAPI
-    // from no games, which reads as a fact about Proton rather than about the
-    // path that was typed.
+    // A folder with no Proton is not a build with no policy.
     let dir = TempDir::new("nvapi-notproton");
 
     let out = dxray([Path::new("nvapi"), dir.path()]);
@@ -352,9 +322,7 @@ fn a_directory_that_is_not_a_proton_says_so_rather_than_reporting_an_empty_polic
 
 #[test]
 fn nvapi_does_not_share_the_frozen_json_shape() {
-    // The JSONL contract is positional and about PE files. A second, unrelated
-    // shape behind the same flag would be the worse kind of breakage, so the
-    // combination is refused at the command line rather than invented.
+    // `--json` is refused: its line shape is about PE files.
     let dir = TempDir::new("nvapi-json");
     let root = proton(&dir, "Proton 9.0", DENY);
 
@@ -365,9 +333,7 @@ fn nvapi_does_not_share_the_frozen_json_shape() {
 
 #[test]
 fn asking_about_an_appid_without_saying_which_build_is_a_usage_error() {
-    // The answer depends entirely on which Proton ran the game — the policy
-    // changed direction twice across releases — so an appid with no build is
-    // not a question that has an answer.
+    // An appid alone has no answer: it depends on the build.
     let out = dxray(["--appid", "570"]);
 
     assert_eq!(out.status.code(), Some(2));
@@ -375,9 +341,7 @@ fn asking_about_an_appid_without_saying_which_build_is_a_usage_error() {
 
 #[test]
 fn the_steam_listing_names_the_build_a_game_ran_under_and_what_it_does_to_nvapi() {
-    // The whole chain in one go: a library, a manifest, the compatibility
-    // prefix Proton left behind, the `config_info` inside it, the build that
-    // file names, and the policy in that build's launcher script.
+    // Library, manifest, prefix, `config_info`, build, script.
     let home = TempDir::new("nvapi-steam-home");
     let root = home.path().join(".steam/steam");
     let steamapps = root.join("steamapps");
@@ -422,10 +386,7 @@ fn the_steam_listing_names_the_build_a_game_ran_under_and_what_it_does_to_nvapi(
 
 #[test]
 fn a_game_that_has_never_run_under_proton_gets_a_row_and_costs_no_exit_code() {
-    // Most of a real library is in this state. A game with nothing said about
-    // its NVAPI reads as a game with nothing wrong with it, so the row is
-    // always printed — and counting it as a scan that came up short would
-    // report every healthy machine as a failure.
+    // A game never run under Proton gets a row and does not fail the run.
     let home = TempDir::new("nvapi-steam-bare");
     let root = home.path().join(".steam/steam");
     let steamapps = root.join("steamapps");

@@ -23,10 +23,7 @@ fn reads_the_import_table_of_a_64_bit_image() {
 
 #[test]
 fn reads_the_import_table_of_a_32_bit_image() {
-    // PE32 puts the data directory 16 bytes earlier than PE32+. Reading it with
-    // the wrong layout does not fail: it finds a zero where the directory count
-    // should be and reports no imports at all. Verified by mutation - a silent
-    // empty answer is the whole reason both widths get the same assertion.
+    // PE32's data directory sits 16 bytes before PE32+'s.
     let buf = Image::x86()
         .importing(&["d3d9.dll", "opengl32.dll"])
         .build();
@@ -85,13 +82,8 @@ fn an_unknown_optional_header_magic_is_not_guessed_at() {
 
 #[test]
 fn an_import_table_reached_through_an_overflowing_section_is_refused_not_answered() {
-    // The whole image, not just the arithmetic: a file whose only section
-    // claims its bytes start at 0xFFFF_FD00 and whose import directory sits
-    // 0x500 into it. The sum leaves u32. In a debug build that used to panic;
-    // in a release build it wrapped to file offset 0x200 and the parser
-    // reported whatever DLL name happened to be lying there, out of a table
-    // the header never declared. A name read from the wrong place is the one
-    // failure this crate must never produce, so the answer has to be an error.
+    // A section offset whose sum leaves `u32` is an error, never a name read
+    // from the wrong place.
     let mut buf = Image::x64().importing(&["d3d12.dll"]).build();
     put32(&mut buf, DIRECTORIES + IMPORT_DIRECTORY * 8, 0x1500);
     put32(&mut buf, FIRST_SECTION_HEADER + 8, 0x2000); // VirtualSize
@@ -104,15 +96,8 @@ fn an_import_table_reached_through_an_overflowing_section_is_refused_not_answere
 
 #[test]
 fn a_directory_count_no_file_could_hold_is_an_error_rather_than_an_allocation() {
-    // `NumberOfRvaAndSizes` is four bytes nobody validated. Reserving what it
-    // claims asked for 34 GB on a file of one kilobyte, and a failed
-    // allocation aborts the process: not an `Err` a caller can catch, so one
-    // hostile or corrupt file killed a whole directory walk.
-    //
-    // This test proving anything at all is the proof. An abort takes the test
-    // binary down with it, so reaching the assertion below is what says the
-    // process survived; the assertion only adds that it survived with the
-    // right answer.
+    // A huge `NumberOfRvaAndSizes` must not abort on allocation; reaching the
+    // assertion proves it did not.
     let mut buf = Image::x64().importing(&["d3d12.dll"]).build();
     put32(&mut buf, DIRECTORY_COUNT, 0xFFFF_FFFF);
 
@@ -125,9 +110,7 @@ fn a_directory_count_no_file_could_hold_is_an_error_rather_than_an_allocation() 
 
 #[test]
 fn a_descriptor_array_that_never_terminates_is_an_error_rather_than_a_short_list() {
-    // A truncated import list reads exactly like a complete one, so a binary
-    // whose `d3d12.dll` sat past the bound came back "no graphics API
-    // determined" with nothing saying why. Built from the constant.
+    // A list past the bound is an error. Built from the constant.
     let names = vec!["engine.dll"; MAX_DESCRIPTORS + 1];
     let buf = Image::x64().importing(&names).build();
     let pe = Pe::parse(&buf).unwrap();

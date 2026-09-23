@@ -68,14 +68,12 @@ fn apps(root: &Object) -> HashMap<u32, String> {
 }
 
 impl Launches {
-    /// The variables the launch options set for `appid`, or why that is not
-    /// known.
+    /// The variables the launch options set for `appid`.
     ///
     /// # Errors
     ///
-    /// When a `localconfig.vdf` could not be read, when the options cannot be
-    /// read without running a shell, or when accounts on this installation set
-    /// different options for the game.
+    /// When a `localconfig.vdf` could not be read, the options need a shell,
+    /// or accounts set different options for the game.
     pub fn environment(&self, appid: u32) -> Result<Vec<(String, String)>, String> {
         if let Some(problem) = self.problems.first() {
             return Err(format!("launch options could not be read: {problem}"));
@@ -97,16 +95,13 @@ impl Launches {
     }
 }
 
-/// The variables `options` sets in the game's environment.
-///
-/// Assignments before `%command%` reach Proton; `env` in front of them does
-/// not change that. Without `%command%` Steam passes the options to the game as
-/// arguments, so nothing is set.
+/// The variables `options` sets before `%command%`, even behind `env`.
+/// Without `%command%` they are the game's arguments, so nothing is set.
 ///
 /// # Errors
 ///
-/// When the part before `%command%` needs a shell to evaluate — `$`, a
-/// backtick, a pipe or a redirection — or a quote is not closed.
+/// When that part needs a shell (`$`, a backtick, a pipe or a redirection) or
+/// a quote is not closed.
 pub fn environment(options: &str) -> Result<Vec<(String, String)>, String> {
     let words = words(options)?;
     let Some(command) = words

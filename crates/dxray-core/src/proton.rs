@@ -1,44 +1,10 @@
-//! Finding the `proton` script a game actually ran under.
+//! Finding the `proton` script a game last ran under, and reading what its
+//! prefix recorded. The IO half of [`nvapi`](crate::nvapi).
 //!
-//! The IO half of [`nvapi`](crate::nvapi), kept as thin as
-//! [`evidence`](crate::evidence) and [`steam`](crate::steam) are: it decides
-//! which candidate paths exist, reads one text file, and hands the bytes over.
-//! Every judgement about what the text *means* is on the pure side.
-//!
-//! Knowing the policy is only half an answer. Proton's policy changed direction
-//! twice and split in two, so the question is never "what does Proton do to
-//! this game" but "what does *this* Proton do to this game" — and which Proton
-//! a game ran under is written down in the prefix Proton built for it.
-//!
-//! # Where that is written down
-//!
-//! Steam gives each game a compatibility prefix at
-//! `<library>/steamapps/compatdata/<appid>/`. Proton writes a `config_info`
-//! file at the top of it whose lines name the directories the build it used
-//! lives in — its fonts, its libraries, its template prefix. Those lines look
-//! like `<proton root>/files/share/fonts/`, so cutting one at its `/files/`
-//! gives the Proton root, and the script is `proton` directly inside it.
-//!
-//! **The marker is not always `files`.** Proton 8.0 and every release before it
-//! unpacked into `dist/` rather than `files/`; 9.0 renamed it. A resolver that
-//! knows only `files` cannot identify any prefix last run under Proton 8.0 or
-//! earlier — which is exactly the era whose policy runs the *other* way round,
-//! so the games it fails on are the ones where being wrong costs most. Both
-//! spellings are accepted here.
-//!
-//! Every candidate root is checked for an actual `proton` file rather than
-//! trusted, because a line can be cut in more than one place — a user whose
-//! home directory is called `files` produces two candidates from one line — and
-//! the file being there is evidence while the string is only a guess.
-//!
-//! # None of this has been run against a real prefix
-//!
-//! There was no Steam, no Proton and no `compatdata` on the machine this was
-//! written on. The layout above is taken from Proton's own source, which is
-//! where `config_info` is written and where the directory names are set, and
-//! the tests prove that this code does what that source says — not that a real
-//! install matches. The one thing the source cannot settle is what a
-//! `config_info` written by a build nobody has read looks like.
+//! Proton writes `config_info` at the top of a game's prefix
+//! (`<library>/steamapps/compatdata/<appid>`), and its lines name the build's
+//! directories. Cutting one at `/files/` (`/dist/` before 9.0) gives the root;
+//! a candidate counts only if a `proton` script is really there.
 
 #[cfg(test)]
 mod tests;
@@ -56,11 +22,7 @@ use crate::steam::launch::Launches;
 /// The file name of the launcher script inside a Proton install.
 const SCRIPT: &str = "proton";
 
-/// What Proton unpacks itself into, newest spelling first.
-///
-/// `files` since Proton 9.0, `dist` before it. Both are kept because a prefix
-/// records the build that last ran it, and plenty of prefixes on a real machine
-/// were last touched years ago.
+/// What Proton unpacks itself into: `files` since 9.0, `dist` before.
 const DIST: [&str; 2] = ["/files/", "/dist/"];
 
 /// What can go wrong while looking for the script.
@@ -70,26 +32,15 @@ pub enum Error {
     Io { path: PathBuf, source: io::Error },
     /// A directory was handed over as a Proton install and holds no `proton`.
     NoScript { root: PathBuf },
-    /// The game has no compatibility prefix.
-    ///
-    /// Its own variant, and the only one that is not a fault: a game that has
-    /// never been launched under Proton has no prefix, which is the ordinary
-    /// state of most of a Steam library. A caller that counted this as a
-    /// failure would report a healthy machine as a broken scan.
+    /// The game has no compatibility prefix: the ordinary state of a game never
+    /// launched under Proton, not a fault.
     NoPrefix { path: PathBuf },
     /// `config_info` was read and no line in it names a Proton directory.
     NoProtonNamed { path: PathBuf },
-    /// It names directories and none of them holds a `proton` script.
-    ///
-    /// What an uninstalled or renamed Proton looks like. Distinct from
-    /// [`Error::NoProtonNamed`] because the fix is different: this one names a
-    /// build that is gone, and a person can see which.
+    /// It names directories and none holds a `proton` script: an uninstalled or
+    /// renamed build.
     ProtonGone { path: PathBuf, named: Vec<PathBuf> },
-    /// It names more than one Proton, and they are not the same directory.
-    ///
-    /// Refused rather than resolved by picking the first. A prefix belongs to
-    /// one build, so two means the file is not what this code believes it is,
-    /// and the wrong build's policy is a confident wrong answer.
+    /// It names more than one Proton. Refused rather than picking one.
     Ambiguous { path: PathBuf, named: Vec<PathBuf> },
 }
 
@@ -107,12 +58,8 @@ impl Error {
         }
     }
 
-    /// Whether this is the ordinary state of a game that has never been run
-    /// rather than something that went wrong.
-    ///
-    /// Callers that sweep a whole library use it to keep an untouched game out
-    /// of the failure count. Nothing else should: it is the one variant that
-    /// does not mean a thing on disk defeated this code.
+    /// Whether this is a game that has never been run, rather than something
+    /// that went wrong.
     #[must_use]
     pub fn is_absent(&self) -> bool {
         matches!(self, Self::NoPrefix { .. })
@@ -185,10 +132,6 @@ pub fn script_in(root: &Path) -> Option<PathBuf> {
 
 /// Takes either a Proton install directory or the script itself.
 ///
-/// Both because both are things a person has in front of them: the directory is
-/// what Steam shows in its library, and the script is what a path copied out of
-/// a `config_info` line points at.
-///
 /// # Errors
 ///
 /// Fails when a directory holds no `proton` script.
@@ -201,10 +144,8 @@ pub fn resolve(target: &Path) -> Result<PathBuf> {
     Ok(target.to_path_buf())
 }
 
-/// The compatibility prefix Steam would give `appid` inside `library`.
-///
-/// Built rather than searched for, and **not** checked for existence: the
-/// caller needs the path in the message when it turns out not to be there.
+/// The compatibility prefix Steam would give `appid` inside `library`, built
+/// rather than searched for and not checked for existence.
 #[must_use]
 pub fn compatdata(library: &Path, appid: u32) -> PathBuf {
     library
@@ -213,25 +154,18 @@ pub fn compatdata(library: &Path, appid: u32) -> PathBuf {
         .join(appid.to_string())
 }
 
-/// The `proton` script the prefix at `compatdata` last ran under.
-///
-/// `compatdata` is the per-game directory, the one named after the application
-/// id, not the `pfx` inside it.
+/// The `proton` script the prefix at `compatdata` (the per-game directory, not
+/// its `pfx`) last ran under.
 ///
 /// # Errors
 ///
-/// Fails when there is no prefix ([`Error::NoPrefix`], which is the ordinary
-/// state of a game nobody has launched), when `config_info` cannot be read,
-/// when no line in it names a Proton, when the Proton it names has gone, or
-/// when it names two.
+/// Fails when there is no prefix ([`Error::NoPrefix`]), when `config_info`
+/// cannot be read, or when it names no Proton, a missing one, or two.
 pub fn from_prefix(compatdata: &Path) -> Result<PathBuf> {
     let path = compatdata.join("config_info");
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
-        // No prefix at all, and no `config_info` inside one that does exist,
-        // both mean the same thing to a caller: there is no build recorded
-        // here. They are reported against different paths so the message says
-        // which.
+        // No prefix, or no `config_info` in one: no build is recorded either way.
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             return Err(Error::NoPrefix {
                 path: if compatdata.is_dir() {
@@ -270,12 +204,8 @@ pub fn for_game(library: &Path, appid: u32) -> Result<PathBuf> {
     from_prefix(&compatdata(library, appid))
 }
 
-/// Reads a script for [`nvapi::scan`](crate::nvapi::scan).
-///
-/// Bytes that are not valid UTF-8 are replaced rather than refused. A launcher
-/// script is ASCII apart from the game titles in its comments, those comments
-/// are stripped before anything is read out of them, and refusing the file over
-/// one bad byte in a comment would lose the whole policy.
+/// Reads a script for [`nvapi::scan`](crate::nvapi::scan). Invalid UTF-8 is
+/// replaced, since it only appears in comments.
 ///
 /// # Errors
 ///
@@ -288,11 +218,8 @@ pub fn read(script: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Every Proton root a `config_info` could be naming.
-///
-/// Every cut of every line, not the first one that matches: a line can hold the
-/// marker more than once, and which occurrence is the real boundary is settled
-/// by looking for the script, not by picking one.
+/// Every Proton root a `config_info` could be naming: every cut of every line,
+/// settled later by looking for the script.
 fn roots_named(text: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for line in text.lines() {
@@ -321,49 +248,26 @@ fn same(a: &Path, b: &Path) -> bool {
     resolve(a) == resolve(b)
 }
 
-/// What one game's NVAPI question came to.
-///
-/// Carries more than any one caller prints. A listing that sweeps a library has
-/// a line per game and shows the sentence; a detail pane has room for the
-/// condition's source. Which of these a caller renders is a presentation
-/// decision, and making it a *data* decision is what put two copies of this
-/// type in two binaries that then had to be kept in step by hand.
+/// What one game's NVAPI question came to, with more than any one caller
+/// prints.
 #[derive(Debug, Clone)]
 pub struct Answer {
-    /// The launcher script the answer was drawn from, when one was found.
-    ///
-    /// Shown beside the verdict and never instead of it. Which Proton ran a
-    /// game decides the answer - the policy changed direction twice across
-    /// releases - so a verdict with no build behind it is not checkable by the
-    /// person reading it.
+    /// The launcher script the answer was drawn from, shown beside the verdict
+    /// so it can be checked.
     pub script: Option<PathBuf>,
     /// The sentence, ready to print.
     pub verdict: String,
-    /// `Some(true)` when Proton offers this game NVAPI, `Some(false)` when it
-    /// withholds it, `None` when that is not settled.
-    ///
-    /// Only fit for colouring a word the sentence beside it spells out. Three
-    /// very different states answer `None` - a condition this crate declines to
-    /// evaluate, a build with no per-game policy, and an absence of knowledge -
-    /// and nothing may read this as telling them apart.
+    /// Whether Proton offers this game NVAPI; `None` when that is not settled.
+    /// Only fit for colouring the sentence beside it.
     pub available: Option<bool>,
-    /// The condition the flag is set under, quoted verbatim.
-    ///
-    /// Verbatim rather than summarised because the reader is the one who gets
-    /// to apply it: they know whether their machine has an NVIDIA module
-    /// loaded, and this crate has decided on purpose not to look.
+    /// The condition the flag is set under, quoted verbatim for the reader to
+    /// apply.
     pub condition: Vec<String>,
 }
 
 impl Answer {
-    /// A game that is not a Steam application, so Steam's Proton policy cannot
-    /// be applied to it. Every Heroic title is this.
-    ///
-    /// The launcher is named rather than assumed, because "Heroic" was hard
-    /// coded here while Heroic was the only non-Steam launcher, and the next
-    /// one would have inherited a sentence that was false about it. The refusal
-    /// itself is the point: this is an answer, not a blank, and a list holding
-    /// Steam and Heroic games side by side needs a sentence in every row.
+    /// A game that is not a Steam application, so Steam's Proton policy does not
+    /// apply. The sentence names the launcher.
     #[must_use]
     pub fn not_applicable(origin: crate::launcher::Origin) -> Self {
         Self {
@@ -404,12 +308,8 @@ pub struct Builds {
 }
 
 impl Builds {
-    /// The NVAPI answer for a game from any launcher. Only a Steam application
-    /// has a prefix to read; any other game is told the question does not
-    /// apply.
-    ///
-    /// `root` is the Steam installation the game came from, which is where its
-    /// launch options live.
+    /// The NVAPI answer for a game from any launcher; only a Steam application
+    /// has a prefix to read. `root` is where its launch options live.
     pub fn answer_for(
         &mut self,
         root: Option<&Path>,

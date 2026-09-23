@@ -1,9 +1,6 @@
-//! Discovery of games installed by Heroic from its local installation cache.
-//!
-//! Heroic has separate backends (Legendary/Epic, GOG and Nile/Amazon), but its
-//! current cache uses the same useful shape: a game title and an install
-//! record. This module reads only those explicit records; it never guesses a
-//! game from a directory called `Games`.
+//! Discovery of games installed by Heroic, from its local installation cache.
+//! Only explicit install records are read; a directory called `Games` is never
+//! taken for a game.
 
 use std::{
     collections::HashSet,
@@ -17,10 +14,8 @@ pub use crate::launcher::Game;
 
 use crate::launcher::{Catalogue, Identity, Libraries, Origin};
 
-/// The launcher this module implements, and the name its messages carry.
-///
-/// Less specific than the origin on any game it produces: a *record* comes from
-/// one backend, but the scanner is just Heroic.
+/// The launcher this module implements. Each game names its backend too, such
+/// as `"Heroic / GOG"`.
 pub const ORIGIN: Origin = Origin::new("heroic", "Heroic");
 
 /// The Heroic backend that supplied a game record.
@@ -37,11 +32,8 @@ impl Store {
         self.origin().label()
     }
 
-    /// What a game from this backend says it came from.
-    ///
-    /// The key stays `"heroic"` for all three. A dedup key wants to know which
-    /// scanner found a directory, not which shop sold the game, and the same
-    /// install can be listed by two backends.
+    /// What a game from this backend says it came from. The key is `"heroic"`
+    /// for all three, since it names the scanner, not the shop.
     #[must_use]
     pub const fn origin(self) -> Origin {
         match self {
@@ -72,16 +64,8 @@ impl crate::launcher::Launcher for Heroic {
         candidate_roots()
     }
 
-    /// One library per root: the configuration root itself.
-    ///
-    /// Not a ceremonial answer invented to fit Steam's shape. The library level
-    /// is "the directory a game's record was read out of, and the directory a
-    /// per-game prefix would sit beside", and for Heroic that is the
-    /// configuration root — which is already what the browser prints and counts
-    /// on a Heroic machine.
-    ///
-    /// It never fails and never has a note, because [`roots`] has already
-    /// checked the only thing there is to check: that `store_cache` is there.
+    /// One library per root: the configuration root itself, the directory the
+    /// records are read from. Never fails; [`roots`] checked `store_cache`.
     fn libraries(&self, root: &Path) -> Libraries {
         Libraries {
             paths: vec![root.to_path_buf()],
@@ -90,13 +74,8 @@ impl crate::launcher::Launcher for Heroic {
         }
     }
 
-    /// Cannot fail wholesale, and the trait's shape says so honestly.
-    ///
-    /// Steam has one mandatory input per library; Heroic reads up to six
-    /// optional cache files, and a missing one is an ordinary empty cache
-    /// rather than a failure. The `problems` list is therefore the only place a
-    /// Heroic failure can appear, which is where Steam's wholesale failure ends
-    /// up too.
+    /// Cannot fail wholesale: every cache file is optional, so failures arrive
+    /// as problems.
     fn games(&self, library: &Path) -> Catalogue {
         let scan = games(library);
         Catalogue {
@@ -128,22 +107,13 @@ pub enum Error {
         id: String,
         install_dir: PathBuf,
     },
-    /// A record that names a game but no directory to find it in.
-    ///
-    /// Held apart from [`Error::BadRecord`] because it is the one unusable
-    /// record whose cost is not decided by the record. Heroic keeps an install
-    /// map and a library list per backend and they do not expire together, so
-    /// one `app_name` can be stale in one and current in the other. If the same
-    /// `(backend, id)` was supplied with a directory elsewhere, this record hid
-    /// nothing from anybody; if it was not, it cost the user a game. See
-    /// `settle_missing_installs`.
+    /// A record that names a game but no directory. A problem only when no other
+    /// cache supplies the same `(backend, id)`; see `settle_missing_installs`.
     NoInstallPath {
         path: PathBuf,
         id: String,
-        /// The backend whose cache this record came from. Carried so that the
-        /// match in `settle_missing_installs` is against the same
-        /// `(backend, id)` pair a [`Game`] is built with, rather than against
-        /// an id that happens to collide across two shops.
+        /// The backend whose cache this record came from, so the match is on the
+        /// same `(backend, id)` a [`Game`] is built with.
         store: Store,
         /// The title the record names, for the sentence a reader gets.
         title: String,
@@ -186,57 +156,25 @@ pub struct Scan {
     /// Records that could not be used and cost something. Should move an exit
     /// code.
     pub problems: Vec<Error>,
-    /// Records that could not be used and cost nothing, already worded with the
-    /// reason they cost nothing. Must not move an exit code. See
-    /// `settle_missing_installs`.
+    /// Records that could not be used and cost nothing, worded with the reason.
+    /// Must not move an exit code.
     pub notes: Vec<String>,
 }
 
-/// Every Heroic installation on this machine. `DXRAY_HEROIC_CONFIG` accepts a
-/// platform-native list for a custom or container home. The normal XDG,
-/// Flatpak and bounded Distrobox-on-mounted-volume homes are all considered.
+/// Every Heroic installation on this machine: XDG, Flatpak, bounded Distrobox
+/// homes on mounted volumes, and `DXRAY_HEROIC_CONFIG`.
 ///
-/// # What makes a directory an installation
-///
-/// A candidate qualifies when it has a `store_cache` directory, and that is a
-/// statement about Heroic rather than a convenient existence check. Heroic's
-/// per-backend caches are `electron-store` instances configured with
-/// `cwd: 'store_cache'`, and reading one that is not on disk yet creates the
-/// directory before returning an empty object — so Heroic's first launch makes
-/// `store_cache` whether or not anybody has signed into a store, and nothing
-/// else on a Linux system makes `~/.config/heroic/store_cache`.
-///
-/// The rule is therefore "Heroic has run here", which is the question
-/// [`roots`](crate::launcher::Launcher::roots) asks. Deliberately *not* "at
-/// least one of the six cache files this module can read is present": those
-/// appear only once a store library has been refreshed, so that stricter rule
-/// would hide a real installation whose owner has not signed in, or whose owner
-/// cleared the cache — and it would hide the whole installation, rather than
-/// showing it with no games in it, on the day Heroic renames a cache file. An
-/// installation with nothing installed is reported with zero games, exactly as
-/// an empty Steam library is.
-///
-/// Configurations are independent launchers, not alternate spellings for one
-/// installation. In particular, an empty host cache must not hide a mounted
-/// Distrobox cache which contains the actual installed games — and, since the
-/// scan no longer drops a root that yielded no game, it must not be hidden by
-/// one either.
+/// A candidate qualifies when it has a `store_cache` directory, which Heroic
+/// creates on its first launch whether or not a store is signed in. An install
+/// with nothing in it is listed with zero games. Each configuration is its own
+/// launcher, so a mounted Distrobox cache is never hidden by the host's.
 #[must_use]
 pub fn roots() -> Vec<PathBuf> {
     existing_roots(candidate_roots())
 }
 
-/// Every path [`roots`] considers, existing or not, in the order it considers
-/// them.
-///
-/// Public for the same reason [`steam::candidate_roots`](crate::steam::candidate_roots)
-/// is: a caller that found no Heroic has to be able to say *where* it looked,
-/// which is the difference between an actionable message and "no Heroic found".
-///
-/// It is the whole candidate list, mounted Distrobox homes included, because
-/// [`roots`] considers all of them — Heroic has no "host first, containers only
-/// as a fallback" rule for Steam's reason, each configuration being a separate
-/// source of records rather than an alias of one install.
+/// Every path [`roots`] considers, existing or not, in order, so a caller that
+/// found no Heroic can say where it looked. Distrobox homes are always included.
 #[must_use]
 pub fn candidate_roots() -> Vec<PathBuf> {
     candidates_from(configured_candidates(), crate::paths::container_homes())
@@ -263,10 +201,8 @@ fn candidates_from(
     mut candidates: Vec<PathBuf>,
     container_homes: impl IntoIterator<Item = PathBuf>,
 ) -> Vec<PathBuf> {
-    // Unlike Steam's symlink-heavy install paths, each Heroic configuration is
-    // a separate source of installed-game records. Keep the host cache and
-    // any bounded mounted Distrobox cache together; `existing_roots` resolves
-    // only aliases of the same directory.
+    // Each configuration is its own source of records, so container caches join
+    // the host's rather than replacing it.
     for home in container_homes {
         candidates.push(home.join(".config/heroic"));
         candidates.push(home.join(".var/app/com.heroicgameslauncher.hgl/config/heroic"));
@@ -292,13 +228,9 @@ fn existing_roots(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Reads installed records in Heroic's `store_cache` under `root`.
-///
-/// Heroic has used both per-backend install maps and library lists.  A library
-/// list is useful when it is the only surviving cache, but only records marked
-/// `is_installed: true` are accepted from it.  In both shapes the title,
-/// absolute install path and the actual directory must exist; stale metadata
-/// becomes a problem rather than a fictitious game.
+/// Reads installed records in Heroic's `store_cache` under `root`: install
+/// maps, and library lists where only `is_installed: true` counts. The title,
+/// an absolute install path and the directory itself must all exist.
 #[must_use]
 pub fn games(root: &Path) -> Scan {
     let mut scan = Scan::default();
@@ -332,33 +264,13 @@ pub fn games(root: &Path) -> Scan {
     scan
 }
 
-/// Moves each "has no `install_path`" record to a note when **that same record**
-/// was supplied with a directory elsewhere, and leaves it a problem otherwise.
+/// Moves each "has no `install_path`" record to a note when the same
+/// `(backend, id)` was supplied with a directory by another cache, and leaves it
+/// a problem otherwise.
 ///
-/// Heroic writes two caches per backend — an install map and a library list —
-/// and they do not expire together. The same game appears in both under the
-/// same `app_name`, so a library entry can lose its `install_path` while the
-/// install map still has it. That record then hid nothing: the game is in the
-/// listing, with its directory, ranked. Charging an exit code for it is this
-/// tool reporting its own bookkeeping as the user's problem, on a machine where
-/// nothing is wrong — and an exit code that fires when nothing is wrong is one
-/// nobody can act on.
-///
-/// # Why the key is the record's own identity
-///
-/// Matching on the *title* was the first attempt and it is unsound in the one
-/// direction that costs a game. Two installs in one Heroic configuration can
-/// share a title while being different records — an Epic copy found normally
-/// and a GOG record under a different `app_name` that lost its path — and a
-/// title match demotes the second because of the first. A game goes missing and
-/// the status says the scan is clean.
-///
-/// `(backend, id)` is what a [`Game`] is built from
-/// ([`Identity::Native`] holds that id), so it is the same key on both sides
-/// and it cannot confuse two records for one. What it gives up is the
-/// case-variant title and the same game listed under two `app_name`s: those
-/// stay problems, which is the safe direction. A refusal to demote prints one
-/// line nobody had to act on; a wrong demotion loses a game silently.
+/// Heroic's install map and library list expire separately, so one can lose a
+/// path the other still has. Matching on the record's identity rather than its
+/// title keeps a different record sharing a title from excusing a lost game.
 fn settle_missing_installs(scan: &mut Scan) {
     let found: HashSet<(Origin, &str)> = scan
         .games
@@ -379,9 +291,7 @@ fn settle_missing_installs(scan: &mut Scan) {
         if !found.contains(&(store.origin(), id.as_str())) {
             return true;
         }
-        // Worded, not dropped. The record is still wrong, and the sentence has
-        // to say both halves or a reader cannot tell a stale cache entry from a
-        // game this tool lost.
+        // Worded with both halves: the record is wrong, and nothing is missing.
         notes.push(format!(
             "{problem}; {title:?} was found from another source, so nothing is \
              missing from this listing"
@@ -430,9 +340,7 @@ fn read_library(
         .or_else(|| value.get("library"))
         .and_then(Json::array)
     else {
-        // Heroic creates these cache files before a backend has synchronised.
-        // An empty object is therefore an ordinary empty cache, not corrupt
-        // metadata worth surfacing as a scan failure.
+        // An empty object is an ordinary cache that has not synchronised yet.
         if value.is_empty_object() {
             return;
         }
@@ -548,9 +456,8 @@ fn bad(path: &Path, id: &str, reason: &'static str) -> Error {
     }
 }
 
-/// The tiny JSON tree Heroic discovery needs. Keeping it local preserves the
-/// dependency-free `dxray-core`/CLI path: only strings and object structure
-/// are interpreted, while arrays, numbers and literals are faithfully skipped.
+/// The tiny JSON tree Heroic discovery needs, kept local so the CLI stays
+/// dependency-free. Only strings, booleans and structure are interpreted.
 #[derive(Debug)]
 enum Json {
     Object(Vec<(String, Self)>),
@@ -615,16 +522,9 @@ impl Json {
     }
 }
 
-/// How deep a cache document may nest before it is treated as malformed.
-///
-/// The number is arbitrary; the bound is not. A real Heroic cache is shallow:
-/// `legendary_library.json` is a `library` array of game records, and the
-/// deepest thing inside one is an entry of `metadata.keyImages`, which lands
-/// around six levels down. Sixty-four is more headroom than any real document
-/// needs. Without *some* cap, a file of nothing but `[` overflows the stack
-/// while descending, and a stack overflow aborts the process — it is not an
-/// error a caller can catch, so one malformed cache file would kill a whole
-/// scan instead of producing one [`Error::Json`].
+/// How deep a cache document may nest before it is treated as malformed. A real
+/// cache is about six levels deep; the bound stops a file of `[` from
+/// overflowing the stack.
 const MAX_DEPTH: usize = 64;
 
 /// Byte cursor over the document, with the text beside it so a multi-byte
@@ -666,9 +566,8 @@ impl<'a> JsonParser<'a> {
             .ok_or_else(|| format!("expected {:?}", char::from(byte)))
     }
 
-    /// `depth` is how many containers are already open around this value, so a
-    /// document nested exactly [`MAX_DEPTH`] deep parses and one level more is
-    /// an error rather than a descent the stack cannot pay for.
+    /// `depth` is how many containers are already open, so a document nested
+    /// exactly [`MAX_DEPTH`] deep parses and one more is an error.
     fn value(&mut self, depth: usize) -> Result<Json, String> {
         self.space();
         match self.input.get(self.at).copied() {
@@ -792,10 +691,9 @@ impl<'a> JsonParser<'a> {
                 0..=31 => return Err("control byte in string".to_owned()),
                 byte if byte.is_ascii() => out.push(char::from(byte)),
                 _ => {
-                    // This validated the whole remaining input, once per
-                    // accented letter, which is quadratic in a cache file full
-                    // of them. `str::get` rather than an index, so a cursor
-                    // left on a character boundary errors instead of panicking.
+                    // Decoded from its own bytes: validating the rest of the file
+                    // per accented letter was quadratic. `str::get` errors where an
+                    // index would panic.
                     let start = self.at - 1;
                     let character = self
                         .text
@@ -861,16 +759,11 @@ mod tests {
 
     #[test]
     fn a_stale_record_for_a_game_another_cache_supplied_is_a_note_not_a_problem() {
-        // Measured on a real machine: a Heroic record for "Fortnite" with no
-        // install_path moved the exit code, while Fortnite itself was found,
-        // resolved and ranked from another cache in the same configuration. The
-        // record hid nothing from anybody, and a status that fires for it is
-        // this tool reporting its own bookkeeping as the user's problem.
+        // Measured on a real machine: a stale "Fortnite" record moved the exit
+        // code while Fortnite itself was found from another cache.
         let root = TempDir::new("heroic-stale");
         let install = root.dir("games/fortnite");
-        // One `app_name`, two caches of the same backend: the install map has
-        // the directory, the library list has lost it. That is the shape the
-        // real machine had, and the id is what ties the two records together.
+        // One `app_name`, two caches: the install map has the path, the list lost it.
         root.write(
             "store_cache/legendary_install_info.json",
             &format!(
@@ -901,12 +794,8 @@ mod tests {
 
     #[test]
     fn a_different_record_that_merely_shares_a_title_does_not_excuse_a_lost_game() {
-        // The direction a title match got wrong, and the reason the key is the
-        // record's own identity. Two records, two backends, two `app_name`s,
-        // one title: the Epic copy is found and the GOG record lost its path.
-        // Under a title match the GOG game vanishes from the listing while the
-        // status says the scan is clean, which is the one failure this project
-        // will not trade an exit code for.
+        // Two records sharing a title: the lost GOG game must not be excused by the
+        // Epic copy.
         let root = TempDir::new("heroic-namesake");
         let install = root.dir("games/epic-hades");
         root.write(
@@ -940,9 +829,7 @@ mod tests {
 
     #[test]
     fn a_record_with_no_install_path_for_a_game_nothing_else_supplied_stays_a_problem() {
-        // The other side of the same line, and why the demotion is conditional.
-        // Here the missing path really did cost the user a game: the listing is
-        // short by one and nothing else in the configuration makes it up.
+        // Here the missing path really cost a game: nothing else supplies it.
         let root = TempDir::new("heroic-lost");
         root.write(
             "store_cache/legendary_library.json",
@@ -964,18 +851,8 @@ mod tests {
 
     #[test]
     fn nesting_is_accepted_up_to_the_limit_and_refused_one_level_past_it() {
-        // The bound is what is tested, not the overflow. Where an unbounded
-        // parser actually dies depends on stack layout and varies between runs,
-        // so a test aimed at that threshold would be flaky; a test aimed at the
-        // limit is exact. That the abort itself is gone is only demonstrable
-        // from a subprocess, which this test deliberately does not claim.
-        //
-        // The value is pinned here as a literal as well, because everything
-        // below builds its document *from* the constant: change 64 and the
-        // fixture changes with it, so the limit would be proved to exist while
-        // its value was held by nothing. Sixty-four, because a real cache record
-        // bottoms out around six levels down at an entry of `metadata.keyImages`
-        // and anything below about ten would start refusing real files.
+        // Tests the bound, not the overflow, which depends on stack layout. The
+        // value is pinned as a literal too, since the fixture is built from it.
         assert_eq!(MAX_DEPTH, 64);
 
         let brackets = |levels: usize| format!("{}{}", "[".repeat(levels), "]".repeat(levels));
@@ -1014,9 +891,7 @@ mod tests {
 
     #[test]
     fn a_pathologically_nested_cache_file_is_a_reported_problem_not_a_dead_scan() {
-        // `read_json` parses every `store_cache/*.json` before anything looks at
-        // its shape, so an unbounded parser made one hostile file abort the
-        // whole scan. The scan now finishes and names the file.
+        // One hostile file must not abort the scan; it is named instead.
         let root = TempDir::new("heroic-deep");
         root.write(
             "store_cache/legendary_library.json",
@@ -1133,14 +1008,8 @@ mod tests {
 
     #[test]
     fn an_installation_is_a_store_cache_directory_and_not_a_bare_config_folder() {
-        // The two edges of the rule `roots` documents, neither of which was
-        // pinned while the caller compensated with a game count.
-        //
-        // An empty `store_cache` is a real installation: Heroic creates that
-        // directory on its first launch, before anybody signs into a store, so
-        // refusing it would refuse an install whose owner has simply not logged
-        // in. A `heroic` folder without one is not: nothing Heroic does leaves
-        // that behind, so it is somebody else's directory or a leftover.
+        // An empty `store_cache` is a real installation (Heroic creates it on first
+        // launch); a `heroic` folder without one is not.
         let fixture = TempDir::new("heroic-install-rule");
         let installed = fixture.dir("installed/.config/heroic/store_cache");
         let installed = installed.parent().expect("installed config").to_path_buf();

@@ -1,15 +1,7 @@
-//! Builds PE images byte by byte.
-//!
-//! The corpus is assembled here rather than committed, because a PE small
-//! enough to read is also small enough to write, and a fixture whose every byte
-//! was put there on purpose cannot pass a test for the wrong reason. It also
-//! means the awkward shapes — a delay-load table with no ordinary imports, a
-//! resource tree three levels deep — can be asked for instead of hunted down.
+//! Builds PE images byte by byte, so every fixture byte is deliberate and
+//! awkward shapes can be asked for.
 
-// Each integration test binary compiles this module on its own and uses only
-// the part it needs, so unused helpers here are expected rather than dead. The
-// sizes are all small constants chosen in this file, so the cast lints have
-// nothing to warn about.
+// Each test binary uses part of this; all sizes are small local constants.
 #![allow(dead_code, clippy::cast_possible_truncation)]
 
 const PE_SIGNATURE: usize = 0x80;
@@ -177,9 +169,8 @@ impl Image {
             }
         }
 
-        // IMAGE_IMPORT_DESCRIPTOR is 20 bytes with the name RVA at +12; the
-        // OriginalFirstThunk at +0 is set only so the entry is not all-zero,
-        // which is what terminates the array.
+        // IMAGE_IMPORT_DESCRIPTOR: 20 bytes, name RVA at +12. OriginalFirstThunk
+        // is set so the entry is not the all-zero terminator.
         for (i, rva) in rvas.0.iter().enumerate() {
             put32(&mut section, i * 20, 1);
             put32(&mut section, i * 20 + 12, *rva);
@@ -194,9 +185,7 @@ impl Image {
 }
 
 /// A resource table: type → name → language, then a data entry, then the blob.
-///
-/// Each directory is a 16-byte header plus one 8-byte entry, so the levels land
-/// at 0, 24 and 48, and the data entry at 72.
+/// The levels land at 0, 24 and 48, and the data entry at 72.
 fn resource_section(type_id: u32, file: [u16; 4], product: [u16; 4]) -> Vec<u8> {
     const LEVEL: usize = 24;
     let data_entry = LEVEL * 3;
@@ -282,12 +271,8 @@ pub fn put32(buf: &mut [u8], at: usize, v: u32) {
 /// Offset of the optional header magic, which a test corrupts on purpose.
 pub const OPTIONAL_MAGIC: usize = OPTIONAL;
 
-// The three offsets below are for shapes the builder deliberately does not
-// offer, because no linker emits them: a directory count no file could hold, a
-// section whose stored bytes start near the top of the address space. A test
-// patches the built image in place rather than the builder growing a knob for
-// each of them. All three are for images from `Image::x64`, whose optional
-// header is 240 bytes.
+// Offsets for shapes no linker emits, patched into an `Image::x64` build
+// (240-byte optional header) rather than offered by the builder.
 
 /// `NumberOfRvaAndSizes` in a PE32+ image: four unvalidated bytes that decide
 /// how much the parser reserves.

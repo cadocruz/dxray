@@ -1,8 +1,5 @@
-//! Dependency firewall for the scriptable `dxray` binary.
-//!
-//! It reads the checked-in lockfile rather than shelling out to `cargo tree`.
-//! Terminal dependencies, including dev-dependencies, are intentionally
-//! rejected so CLI builds and tests remain small.
+//! Keeps terminal dependencies, dev ones included, out of `dxray`, read from
+//! the lockfile.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,13 +11,8 @@ fn lockfile() -> String {
         .unwrap_or_else(|error| panic!("the workspace lockfile must be readable: {root}: {error}"))
 }
 
-/// Package name to the names of everything it depends on.
-///
-/// Cargo writes a bare name when only one version of it is in the lock and
-/// `"name version"` when there are several, so only the first word of an entry
-/// is the name. Versions are dropped rather than kept: the question here is
-/// whether a crate is reachable at all, and two versions of it would both be
-/// two answers of yes.
+/// Package name to the names of everything it depends on. An entry's first
+/// word is the name; versions are dropped.
 fn graph(lock: &str) -> HashMap<String, Vec<String>> {
     let mut packages = HashMap::new();
     let mut name: Option<String> = None;
@@ -65,10 +57,7 @@ fn reachable(packages: &HashMap<String, Vec<String>>, from: &str) -> HashSet<Str
         if !seen.insert(package.clone()) {
             continue;
         }
-        // A name with no entry of its own is a package the lock names as a
-        // dependency and does not describe, which cannot happen in a lockfile
-        // cargo wrote. It is skipped rather than panicked over so that a
-        // hand-edited lock produces a dependency answer instead of a crash.
+        // Undescribed in a hand-edited lock: skipped, not panicked over.
         if let Some(dependencies) = packages.get(&package) {
             queue.extend(dependencies.iter().cloned());
         }
@@ -78,9 +67,7 @@ fn reachable(packages: &HashMap<String, Vec<String>>, from: &str) -> HashSet<Str
 
 #[test]
 fn dxray_cannot_reach_a_terminal_library() {
-    // The whole argument for `dxray-tui` being a second binary. If this fails,
-    // somebody has put ratatui behind a flag in the tool people script against,
-    // and every scripted run now compiles sixty-eight crates to not use them.
+    // No ratatui in the scriptable binary.
     let lock = lockfile();
     let packages = graph(&lock);
     assert!(
@@ -103,10 +90,7 @@ fn dxray_cannot_reach_a_terminal_library() {
 
 #[test]
 fn dxray_still_depends_on_almost_nothing() {
-    // The stronger half, and the one that catches the case the test above
-    // cannot: a dependency that is not ratatui and is not wanted either. The
-    // list is spelled out so that adding to it is a deliberate edit somebody
-    // has to justify in a diff, rather than a number quietly going up.
+    // The full allow-list, so any new dependency is a deliberate edit.
     let lock = lockfile();
     let reached = reachable(&graph(&lock), "dxray-cli");
 
@@ -171,11 +155,7 @@ fn dxray_still_depends_on_almost_nothing() {
 
 #[test]
 fn the_walk_would_notice_a_terminal_library_if_there_were_one() {
-    // A test that can only pass is not a test. This drives the same parser and
-    // the same walk over a lockfile written here, where the dependency it is
-    // looking for is definitely present and two links away rather than one —
-    // so it also covers the case this exists to catch, which is ratatui
-    // arriving through something else rather than being added directly.
+    // The walk finds a dependency two links away.
     let lock = "\
 [[package]]
 name = \"pretend-cli\"

@@ -1,14 +1,7 @@
-//! The only half of this crate that touches the filesystem.
-//!
-//! Kept deliberately thin. Everything it produces is a list of names, and every
-//! judgement made about those names lives in [`analysis`](crate::analysis),
-//! where it can be tested against a hundred awkward cases without a disk, a
-//! Windows install or a game.
-//!
-//! It reads one file more than the one it was asked about: a library sitting
-//! beside the executable that the executable imports. What comes back is still
-//! only names, which library and what it imports in turn, so the judgement
-//! stays where it was. See [`LibraryCache`].
+//! The only half of this crate that touches the filesystem, kept thin: it
+//! produces names, and [`analysis`](crate::analysis) judges them. Besides the
+//! image itself it reads the libraries beside it that it imports; see
+//! [`LibraryCache`].
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,18 +17,13 @@ use crate::analysis::{Evidence, FileVersion, Linked, Verdict};
 use crate::install::MAX_LOCAL_LIBRARIES;
 
 impl Evidence {
-    /// Reads `path` as a PE image and lists the directory it sits in.
-    ///
-    /// Parse failures come back as [`io::ErrorKind::InvalidData`] rather than
-    /// as a separate error type, because every caller of this function is
-    /// already handling an `io::Error` from the read and a second error type
-    /// buys nothing but a `From` impl.
+    /// Reads `path` as a PE image and lists the directory it sits in. Parse
+    /// failures come back as [`io::ErrorKind::InvalidData`].
     ///
     /// # Errors
     ///
-    /// Fails if `path` cannot be read, or if it is not a PE image, or if its
-    /// import tables are malformed. A directory that cannot be listed is *not*
-    /// an error — see [`neighbours_of`].
+    /// Fails if `path` cannot be read, is not a PE image, or has malformed
+    /// import tables. An unlistable directory is not an error.
     pub fn from_executable(path: &Path) -> io::Result<Self> {
         let bytes = fs::read(path)?;
         let pe = Pe::parse(&bytes).map_err(invalid_data)?;
@@ -52,21 +40,11 @@ impl Evidence {
     }
 }
 
-/// Reads each library beside an executable at most once, however many questions
-/// are asked about it.
+/// Reads each library beside an executable at most once, for both questions
+/// asked of it: what it imports, and what version it carries.
 ///
-/// Two questions are asked of the same files — what does this library import in
-/// turn, and what version does it carry — and both are answered from one read,
-/// because both come out of one `Pe`. Before this, a directory of 803 files had
-/// each of its three DLSS runtimes opened 805 times: every record listed the
-/// directory afresh and nothing was remembered between records. The same folder
-/// now costs one read per library.
-///
-/// **Scoped to one directory**, and it enforces that itself rather than
-/// trusting callers to. The key is a library name, so two directories sharing
-/// one cache would attribute one `UnityPlayer.dll` to the other's games;
-/// `enter` drops everything the moment the directory changes, which
-/// also keeps a recursive walk's memory to one folder's worth.
+/// Scoped to one directory, and it enforces that itself: the key is a library
+/// name, so entering another directory drops everything.
 #[derive(Default)]
 pub struct LibraryCache {
     /// The directory every entry below was read from, once anything has been.
@@ -78,9 +56,8 @@ pub struct LibraryCache {
 
 /// One library read once: what it imports, and what version it carries.
 struct Library {
-    /// `None` when the file is not a PE image whose import tables this can
-    /// read. Recorded rather than retried, so a broken DLL costs one read and
-    /// not one per executable in the folder.
+    /// `None` when the file's import tables cannot be read. Recorded, so a broken
+    /// DLL costs one read.
     linked: Option<Linked>,
     /// Never [`FileVersion::Elsewhere`] or [`FileVersion::Unread`]: the file
     /// was found in the directory and an attempt was made on it.
@@ -89,10 +66,7 @@ struct Library {
 
 impl LibraryCache {
     /// Points the cache at the directory `path` sits in, forgetting another
-    /// directory's files.
-    ///
-    /// Returns the directory, or `None` for a path that has none — a root, or a
-    /// path that is nothing but a prefix.
+    /// directory's files. `None` for a path with no directory.
     fn enter<'a>(&mut self, path: &'a Path) -> Option<&'a Path> {
         let dir = directory_of(path)?;
         if self.dir.as_deref() != Some(dir) {
@@ -103,18 +77,8 @@ impl LibraryCache {
         Some(dir)
     }
 
-    /// The names of the files sitting beside `path`, listing the directory once
-    /// however many files in it are inspected.
-    ///
-    /// `path` itself is filtered out here rather than left out of the listing,
-    /// because every file in the folder shares this listing and each of them
-    /// has a different name to exclude. That filtering is string comparisons;
-    /// the thing worth not repeating is the `read_dir`.
-    ///
-    /// This is the multiplier the open count does not show. Listing an 803-file
-    /// directory once per record is 803 listings of 803 entries, and on a
-    /// Windows mount — where every one of them crosses a 9p boundary — it is
-    /// what a user actually waits for once the duplicate reads are gone.
+    /// The names of the files beside `path`, listing the directory once however
+    /// many of its files are inspected. `path` itself is filtered out here.
     #[must_use]
     pub fn neighbours(&mut self, path: &Path) -> Vec<String> {
         let Some(dir) = self.enter(path) else {
@@ -132,11 +96,8 @@ impl LibraryCache {
             .collect()
     }
 
-    /// The library `lower` names, read at most once per directory.
-    ///
-    /// `None` when no file of that name sits beside the executable, which is
-    /// the ordinary answer for `d3d12.dll` and every other name the loader
-    /// takes from `System32`.
+    /// The library `lower` names, read at most once per directory. `None` when
+    /// no file of that name sits beside the executable.
     fn library(&mut self, dir: &Path, lower: &str, neighbours: &[String]) -> Option<&Library> {
         if !self.read.contains_key(lower) {
             let on_disk = neighbours
@@ -148,21 +109,9 @@ impl LibraryCache {
         self.read.get(lower)
     }
 
-    /// Follows an image's imports one step, into libraries sitting beside it.
-    ///
-    /// A Unity executable is a stub that imports `UnityPlayer.dll` and nothing
-    /// graphical, and the renderer is one link further on. Only the same
-    /// directory is looked in: a library resolved out of `System32` describes
-    /// Windows rather than the game, and one three folders away is not a name
-    /// the loader would resolve this way at all.
-    ///
-    /// Unreadable libraries are skipped rather than reported. This is a
-    /// supporting signal gathered from files nobody asked about, and a note for
-    /// every DLL in a game directory that failed to parse would bury the answer.
-    ///
-    /// `path` is the image being inspected, not the directory: the cache has to
-    /// know which folder it is in, and deriving that here is one fewer thing a
-    /// caller can get wrong.
+    /// Follows an image's imports one step, into libraries sitting beside it,
+    /// which is how a Unity stub's renderer is found. Unreadable libraries are
+    /// skipped: they are supporting evidence nobody asked about.
     pub fn follow(
         &mut self,
         path: &Path,
@@ -181,9 +130,7 @@ impl LibraryCache {
             if seen.len() >= MAX_LOCAL_LIBRARIES {
                 break;
             }
-            // Lowercased so an import spelled `UNITYPLAYER.DLL` still finds the
-            // file spelled `UnityPlayer.dll`; PE import names are famously
-            // inconsistent about case.
+            // Lowercased: PE import names are inconsistent about case.
             let lower = name.to_ascii_lowercase();
             if seen.contains(&lower) {
                 continue;
@@ -193,9 +140,7 @@ impl LibraryCache {
             if Path::new(&lower).extension() != Some("dll".as_ref()) {
                 continue;
             }
-            // `None` means no file of that name is here, which does not spend
-            // any of the budget below: the bound counts libraries read, and a
-            // name the loader takes from Windows was never read.
+            // A name not on disk does not spend the budget, which counts reads.
             let Some(linked) = self
                 .library(&dir, &lower, neighbours)
                 .map(|library| library.linked.clone())
@@ -211,10 +156,7 @@ impl LibraryCache {
     }
 
     /// Fills in the version of every file the verdict's signals name, reusing
-    /// whatever this directory has already been read for.
-    ///
-    /// See [`stamp_versions`] for why this happens after the verdict and why it
-    /// judges nothing.
+    /// this directory's reads. See [`stamp_versions`].
     pub fn stamp(&mut self, verdict: &mut Verdict, path: &Path, neighbours: &[String]) {
         let Some(dir) = self.enter(path) else {
             return;
@@ -238,11 +180,8 @@ impl LibraryCache {
     }
 }
 
-/// One library read: its import tables, and its version, from a single read.
-///
-/// The two halves fail independently on purpose. An image whose import tables
-/// are malformed may still carry a perfectly good version resource, and there
-/// is no reason for one broken table to cost the other answer.
+/// One library read: its import tables and its version, from one read. The two
+/// fail independently.
 fn read_library(path: &Path, spelled: &str) -> Library {
     let unreadable = Library {
         linked: None,
@@ -272,15 +211,8 @@ fn read_library(path: &Path, spelled: &str) -> Library {
     }
 }
 
-/// The one-link chase for a single executable, with no cache to share.
-///
-/// Public because a caller that has already read the image - and does not want
-/// to read it twice - still has to reach the same conclusion this does. Two
-/// callers doing their own chase is how the verdict and the ranking came to
-/// disagree in the first place.
-///
-/// A caller walking a whole directory should hold a [`LibraryCache`] instead:
-/// this reads every library again for every executable.
+/// The one-link chase for a single executable, with no cache. A caller walking
+/// a directory should hold a [`LibraryCache`] instead.
 #[must_use]
 pub fn linked_libraries(
     path: &Path,
@@ -291,95 +223,44 @@ pub fn linked_libraries(
     LibraryCache::default().follow(path, imports, delay_imports, neighbours)
 }
 
-/// Fills in the version of every file the verdict's signals name.
+/// Fills in the version of every file the verdict's signals name: the uncached
+/// form of [`LibraryCache::stamp`].
 ///
-/// The uncached form of [`LibraryCache::stamp`], for a caller with one file to
-/// ask about. Between them they are the **only** place in the project that
-/// reads a version off disk for a library other than the one under inspection,
-/// because this project has twice paid for one rule implemented in two places.
-///
-/// A caller walking a whole directory should hold a [`LibraryCache`] instead:
-/// this reads every named library again for every executable.
-///
-/// # Why after the verdict, not during the evidence
-///
-/// A real game directory holds hundreds of DLLs and reading a version means
-/// reading the whole file; `nvngx_dlss.dll` alone runs to tens of megabytes.
-/// Versioning every neighbour would be most of the cost of the scan spent on
-/// files nobody will be told about. So [`analyse`](crate::analyse) decides what
-/// matters first and this reads exactly the files it named — at most a handful,
-/// and each of them once even when several findings point at the same file.
-///
-/// # Why it judges nothing
-///
-/// The rule is one line and has no exceptions: *if a file of that name sits
-/// beside the executable, report its version; otherwise say so*. No category is
-/// treated specially. That is what makes `d3d12.dll` come back
-/// [`Elsewhere`](FileVersion::Elsewhere) in an ordinary game — the loader takes
-/// it from `System32` and its version describes Windows — while the same name
-/// in a directory where somebody dropped a proxy DLL comes back stamped, which
-/// is precisely the case where the number is worth having.
-///
-/// `neighbours` is passed in rather than listed again so the spelling matched
-/// against is the directory's own. An import table saying `D3D12.dll` has to
-/// find a file called `d3d12.dll`, and on the Linux machines this tool runs on
-/// nothing else will do that for us.
+/// Done after the verdict, so only the handful of files it names are read. The
+/// rule has no exceptions: a file of that name beside the executable reports its
+/// version, and anything else is [`Elsewhere`](FileVersion::Elsewhere).
+/// `neighbours` supplies the directory's own spelling of each name.
 pub fn stamp_versions(verdict: &mut Verdict, path: &Path, neighbours: &[String]) {
     LibraryCache::default().stamp(verdict, path, neighbours);
 }
 
-/// The directory `path` sits in.
-///
-/// `Path::parent` of a bare file name is an empty path, which `read_dir`
-/// rejects and `join` mishandles; the directory meant is the current one. One
-/// function because three callers here need the same answer and three spellings
-/// of it is two too many.
+/// The directory `path` sits in: `.` for a bare file name, `None` for a root
+/// or a bare prefix.
 fn directory_of(path: &Path) -> Option<&Path> {
     match path.parent() {
-        // A root, or a path that is nothing but a prefix. There is no directory
-        // "beside" it and pretending it is the current one would list a folder
-        // that has nothing to do with the question.
+        // A root, or a path that is nothing but a prefix: nothing sits beside it.
         None => None,
         Some(dir) if dir.as_os_str().is_empty() => Some(Path::new(".")),
         Some(dir) => Some(dir),
     }
 }
 
-/// A parse failure as an [`io::Error`]. The original error is kept as the
-/// source, so the message a caller prints still names the field that was wrong
-/// rather than flattening to "invalid data".
+/// A parse failure as an [`io::Error`], keeping the original error as the
+/// source.
 fn invalid_data(error: dxray_pe::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
 /// File names sitting beside `path`, excluding `path` itself and every
-/// subdirectory.
-///
-/// An unreadable directory yields an empty list rather than an error. The
-/// neighbours are one supporting signal among several, and a permission error
-/// on a directory means the tool learned nothing there — not that it failed to
-/// read the file it was asked about. Turning it into an error would sink a
-/// record that is otherwise complete.
-///
-/// Subdirectories are excluded because the question they answer is about
-/// loader search order, and the loader looks in the directory itself.
-///
-/// The uncached form of [`LibraryCache::neighbours`]. A caller walking a whole
-/// directory should hold a cache: this lists the folder again for every file in
-/// it, which is quadratic in its entries and is what a Windows mount charges
-/// for once the duplicate reads are gone.
+/// subdirectory. An unreadable directory yields an empty list: the neighbours
+/// are supporting evidence. The uncached form of [`LibraryCache::neighbours`].
 #[must_use]
 pub fn neighbours_of(path: &Path) -> Vec<String> {
     LibraryCache::default().neighbours(path)
 }
 
-/// Every file name directly in `dir`, sorted, with subdirectories left out.
-///
-/// An unreadable directory yields an empty list rather than an error. The
-/// neighbours are one supporting signal among several, and a permission error
-/// on a directory means the tool learned nothing there — not that it failed to
-/// read the file it was asked about. Turning it into an error would sink a
-/// record that is otherwise complete.
+/// Every file name directly in `dir`, sorted, with subdirectories left out. An
+/// unreadable directory yields an empty list.
 fn list_directory(dir: &Path) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -387,18 +268,15 @@ fn list_directory(dir: &Path) -> Vec<String> {
 
     let mut names = Vec::new();
     for entry in entries.flatten() {
-        // `file_type` does not follow symlinks, so a link to a directory is
-        // still reported as a file here. That is the right answer: a link named
-        // `dxgi.dll` shadows the system copy exactly as a real file would.
+        // `file_type` does not follow symlinks: a link named `dxgi.dll` shadows
+        // the system copy like a file.
         if entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
 
-    // Sorted so a verdict does not reorder itself between runs: `read_dir`
-    // makes no promise about order and two scans of one directory should be
-    // diffable against each other.
+    // Sorted, since `read_dir` promises no order and scans should be diffable.
     names.sort_unstable();
     names
 }
@@ -442,9 +320,7 @@ mod tests {
 
     #[test]
     fn a_directory_that_cannot_be_listed_yields_no_neighbours_rather_than_an_error() {
-        // Neighbours are supporting evidence. A path that is not there means
-        // nothing was learned from the directory, which must not sink a record
-        // that is otherwise complete.
+        // Supporting evidence: learning nothing must not sink the record.
         let missing = Path::new("/dxray-no-such-directory-anywhere/game.exe");
 
         assert!(
@@ -475,15 +351,8 @@ mod linked_tests {
     use crate::analysis::{Evidence, Source, analyse};
     use crate::testutil::TempDir;
 
-    /// The shape that exposed this: Honkai: Star Rail, read on a real machine.
-    ///
-    /// A Unity executable is a stub. It imports `UnityPlayer.dll` and nothing
-    /// graphical, and the engine one link on is what reaches Direct3D. Before
-    /// the link was followed here, the ranking scored such a binary 170 —
-    /// crediting it for reaching a renderer through `UnityPlayer.dll` — while
-    /// the verdict printed beside that score said "no graphics API determined".
-    /// Two layers answering one question differently, and the confident half
-    /// was the wrong one.
+    /// The shape that exposed this: Honkai: Star Rail, a Unity stub whose
+    /// renderer is one link on.
     #[test]
     fn a_renderer_reached_through_a_local_library_is_in_the_verdict() {
         let dir = TempDir::new("linked");
@@ -510,9 +379,7 @@ mod linked_tests {
 
     #[test]
     fn a_library_in_the_directory_that_the_executable_does_not_import_is_not_followed() {
-        // The loader resolves what the import table names. A DLL that merely
-        // sits in the folder is a neighbour, and reading it as a link would let
-        // any stray engine DLL decide the verdict for an unrelated binary.
+        // Only imported libraries are followed, never a stray DLL in the folder.
         let dir = TempDir::new("unimported");
         let exe = dir.image("launcher.exe", &["KERNEL32.dll"], &[]);
         dir.image("UnityPlayer.dll", &["d3d11.dll"], &[]);
@@ -528,9 +395,7 @@ mod linked_tests {
 
     #[test]
     fn a_direct_import_outranks_the_same_api_reached_through_a_library() {
-        // Both are true at once for plenty of engines. The order is the point:
-        // the executable's own import table is the stronger claim, and the
-        // detail pane shows the strongest signal first.
+        // The executable's own import table is the stronger claim.
         let dir = TempDir::new("both");
         let exe = dir.image("game.exe", &["d3d11.dll", "Engine.dll"], &[]);
         dir.image("Engine.dll", &["d3d11.dll"], &[]);
@@ -547,15 +412,8 @@ mod linked_tests {
 
     #[test]
     fn exactly_the_local_library_budget_is_followed_and_no_more() {
-        // The budget was untested in both directions: raising it changed
-        // nothing any test could see, and lowering it to one would silently
-        // reduce the link chase to whichever library the import table happens to
-        // name first. A stub loader's engine DLL is regularly not the first
-        // import, so that is a wrong verdict, not a smaller one.
-        //
-        // This fixture is built from the constant, so it proves the budget is a
-        // hard stop rather than what the number is; the number itself is pinned
-        // as a literal in `install::tests`.
+        // Built from the constant, so it proves the budget is a hard stop; the
+        // number itself is pinned in `install::tests`.
         use super::{LibraryCache, MAX_LOCAL_LIBRARIES, neighbours_of};
 
         let dir = TempDir::new("budget");
@@ -579,9 +437,7 @@ mod linked_tests {
 
     #[test]
     fn an_unreadable_local_library_is_skipped_rather_than_failing_the_read() {
-        // A game directory is full of DLLs this tool has no business parsing.
-        // One that is not a PE at all must cost nothing: the executable was
-        // read successfully and that is the question that was asked.
+        // A DLL that is not a PE at all must cost nothing.
         let dir = TempDir::new("badlib");
         let exe = dir.image("game.exe", &["KERNEL32.dll", "Broken.dll"], &[]);
         dir.write("Broken.dll", "not a PE image at all");

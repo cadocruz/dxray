@@ -1,13 +1,7 @@
-//! Fixtures for driving the binary end to end.
-//!
-//! The images are assembled here rather than copied from the system, because a
-//! test that depends on `C:\Windows` passes or fails for reasons that have
-//! nothing to do with this crate. These are the smallest files the parser will
-//! accept, which is all the CLI needs in order to have something to report.
+//! Fixtures for driving the binary end to end: the smallest PE images the
+//! parser accepts, assembled rather than copied off a system.
 
-// One test binary compiles this and uses most of it; the rest is here so the
-// next test does not have to reinvent it. All sizes are small constants chosen
-// in this file, so the cast lints have nothing to warn about.
+// Each test binary uses part of this; all sizes are small local constants.
 #![allow(dead_code, clippy::cast_possible_truncation)]
 
 use std::path::{Path, PathBuf};
@@ -75,9 +69,8 @@ impl Image {
         self
     }
 
-    /// Gives the image a `VS_FIXEDFILEINFO`. `[0, 0, 0, 0]` is a legitimate
-    /// argument: a resource that is present and all zeroes is a real state on a
-    /// real install, and must not come back looking like a missing one.
+    /// Gives the image a `VS_FIXEDFILEINFO`. `[0, 0, 0, 0]` gives a resource
+    /// present and all zeroes, not a missing one.
     pub fn versioned(mut self, file: [u16; 4], product: [u16; 4]) -> Self {
         self.version = Some((file, product));
         self
@@ -156,9 +149,7 @@ impl Image {
 }
 
 /// A resource table: type -> name -> language, a data entry, then the blob.
-///
-/// Each directory is a 16-byte header plus one 8-byte entry, so the three
-/// levels land at 0, 24 and 48 and the data entry at 72.
+/// The three levels land at 0, 24 and 48 and the data entry at 72.
 fn resource_section(file: [u16; 4], product: [u16; 4]) -> Vec<u8> {
     const LEVEL: usize = 24;
     let data_entry = LEVEL * 3;
@@ -247,9 +238,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 impl TempDir {
     pub fn new(tag: &str) -> Self {
-        // Process id and a counter, because tests run in parallel threads and
-        // two of them sharing a directory is a failure that only shows up on a
-        // busy machine.
+        // Process id and a counter: tests run in parallel.
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut path = std::env::temp_dir();
         path.push(format!("dxray-cli-{}-{tag}-{n}", std::process::id()));
@@ -289,12 +278,8 @@ where
         .expect("run dxray")
 }
 
-/// Runs the binary with discovery confined to `home`.
-///
-/// The normal runtime scan may additionally find Steam in a mounted Distrobox
-/// home. Integration fixtures must not inherit that host state: an empty
-/// `DXRAY_CONTAINER_HOMES` explicitly disables only that fallback, while the
-/// XDG and custom-root variables are removed for the same reason.
+/// Runs the binary with discovery confined to `home`: no Distrobox scan, no
+/// XDG or custom-root variables.
 pub fn dxray_with_home<I, S>(home: &Path, args: I) -> Output
 where
     I: IntoIterator<Item = S>,

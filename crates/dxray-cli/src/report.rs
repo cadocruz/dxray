@@ -1,9 +1,5 @@
-//! The human-readable report.
-//!
-//! The judgement is `dxray-core`'s; this module only lays it out. Nothing here
-//! decides what a library means, and the raw import lists stay below the
-//! verdict so a reader who disagrees with it can check the evidence without
-//! re-running anything.
+//! The human-readable report. The judgement is `dxray-core`'s; the raw
+//! import lists stay below the verdict so a reader can check it.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -131,9 +127,7 @@ fn render_body(out: &mut String, record: &Record) {
     }
     row(out, "version", &versions(record));
 
-    // The verdict first, then the findings that produced it, then the raw
-    // tables. A reader who trusts the tool stops at the first line; one who
-    // does not can walk down to the evidence without leaving the block.
+    // The verdict, then the findings, then the raw tables.
     let verdict = &record.verdict;
     row(out, "verdict", &verdict.headline());
     findings(out, "renderer", &verdict.renderers);
@@ -141,9 +135,7 @@ fn render_body(out: &mut String, record: &Record) {
     findings(out, "feature", &verdict.features);
     findings(out, "override", &verdict.local_overrides);
 
-    // Delay-loaded entries are marked rather than listed apart: what matters to
-    // a reader is that the dependency exists, and the fact that it resolves
-    // late is a property of the dependency, not a second list.
+    // Delay-loaded imports are marked, not listed apart.
     let mut graphics = Vec::new();
     let mut other = Vec::new();
     let named = named_by(verdict);
@@ -151,9 +143,7 @@ fn render_body(out: &mut String, record: &Record) {
         pick(&mut graphics, &mut other, &named, name, name.clone());
     }
     for name in &record.delay_imports {
-        // `Source::as_str` and not a literal: the findings rows eight lines
-        // above spell this fact through `Signal::describe`, and one record
-        // carrying two spellings of one fact is the defect named below.
+        // `Source::as_str`, so the import rows spell it as the findings do.
         let marked = format!("{name} ({})", Source::DelayImport.as_str());
         pick(&mut graphics, &mut other, &named, name, marked);
     }
@@ -170,11 +160,8 @@ fn render_body(out: &mut String, record: &Record) {
     }
 }
 
-/// A one-line trailer, emitted only when more than one thing was looked at —
-/// for a single one it would just restate the block above it.
-///
-/// `noun` because `game` counts install directories rather than files, and a
-/// trailer that calls them files is a small lie in the line that gets quoted.
+/// A one-line trailer, only when more than one thing was looked at. `noun`
+/// says what was counted.
 pub fn summary(total: usize, failed: usize, noun: &str) -> Option<String> {
     if total < 2 {
         return None;
@@ -185,19 +172,13 @@ pub fn summary(total: usize, failed: usize, noun: &str) -> Option<String> {
     })
 }
 
-/// One row per finding, each naming the libraries it was drawn from.
-///
-/// The provenance is printed rather than summarised because it is the part a
-/// reader argues with: "Direct3D 11" is a conclusion, while "d3d11.dll
-/// (delay-import)" is the observation, and only one of the two can be checked
-/// against the file.
+/// One row per finding, each naming the libraries it was drawn from: the part
+/// a reader can check against the file.
 fn findings(out: &mut String, label: &str, findings: &[Finding]) {
     for finding in findings {
         let mut parts = Vec::with_capacity(finding.signals.len() + 1);
         parts.push(finding.name.clone());
-        // `Signal::describe` and not a format string here: the TUI prints the
-        // same line, and a version that appears in one surface and not the
-        // other is the exact defect this project has already fixed twice.
+        // `Signal::describe`, shared with the TUI.
         parts.extend(finding.signals.iter().map(dxray_core::Signal::describe));
         row(out, label, &wrap(&parts));
     }
@@ -214,12 +195,8 @@ fn versions(record: &Record) -> String {
     }
 }
 
-/// Every library the verdict above quotes, lowercased.
-///
-/// A name in here already has a row further up, so filing it with the crowd
-/// would describe one library two ways in one block. `dinput8.dll` draws
-/// nothing, but a file of that name beside the executable is a reported
-/// override, and no rule about the name alone can know that.
+/// Every library the verdict above quotes, lowercased. Such a name already has
+/// a row further up, so it is not filed with the crowd.
 fn named_by(verdict: &dxray_core::Verdict) -> HashSet<String> {
     verdict
         .renderers
@@ -233,12 +210,7 @@ fn named_by(verdict: &dxray_core::Verdict) -> HashSet<String> {
 }
 
 /// Files a name under the row it belongs in, asking `dxray-core` which one.
-///
-/// `name` is the library as the import table spelled it; `text` is what the row
-/// prints, which for a delay-loaded entry carries its marker. The question is
-/// `dxray-core`'s because the verdict printed above these rows answers it too,
-/// and a private table here is how a name got reported as a feature and as
-/// non-graphical in the same block.
+/// `text` is what the row prints, with any delay-import marker.
 fn pick(
     graphics: &mut Vec<String>,
     other: &mut Vec<String>,
@@ -257,10 +229,8 @@ fn row(out: &mut String, label: &str, value: &str) {
     let _ = writeln!(out, "  {label:<LABEL$}{value}");
 }
 
-/// Joins names into wrapped lines, each continuation lined up under the first.
-///
-/// A name longer than the whole width goes on a line of its own and overflows,
-/// because splitting a DLL name in half makes it unsearchable.
+/// Joins names into wrapped lines, each continuation under the first. A name
+/// longer than the line overflows rather than being split.
 fn wrap(names: &[String]) -> String {
     let mut out = String::new();
     let mut column = INDENT;
@@ -385,10 +355,7 @@ mod tests {
 
     #[test]
     fn a_findings_row_carries_the_version_of_the_file_behind_it() {
-        // The whole point of stamping. "nvngx_dlss.dll (neighbour)" names a
-        // file that has been called that in every version ever shipped, which
-        // is not an answer to the question anyone has in front of a game
-        // directory. The number is, and this is the row it has to land in.
+        // The name alone identifies no build; the version must land in the row.
         use dxray_core::{FileVersion, Signal, Source, Version, VersionInfo};
 
         let mut record = sample();
@@ -436,10 +403,7 @@ mod tests {
 
     #[test]
     fn the_import_rows_spell_a_delay_load_the_way_the_findings_rows_do() {
-        // One record, one fact. The findings row above says "delay-import"
-        // through `Signal::describe`; an import row saying "(delayed)" eight
-        // lines below it is the same fact in a second spelling, which is the
-        // defect this project has already fixed twice elsewhere.
+        // One fact, one spelling: "delay-import" in both rows.
         let text = render(&sample());
 
         assert!(
@@ -457,10 +421,7 @@ mod tests {
 
     #[test]
     fn a_library_the_verdict_names_is_never_filed_as_one_of_the_uninteresting_ones() {
-        // The shape a mod loader installs: the game imports `dinput8.dll` and
-        // ships a local copy of it. The verdict calls that an override; the
-        // import rows used to file the same name under `other`, because the CLI
-        // kept a prefix table of its own that had never heard of it.
+        // A mod loader's shape: the game imports `dinput8.dll` and ships a copy.
         let mut record = sample();
         record.imports = vec![
             "KERNEL32.dll".to_owned(),

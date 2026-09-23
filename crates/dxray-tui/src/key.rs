@@ -1,13 +1,6 @@
-//! The keys this program has an opinion about, and nothing else.
-//!
-//! A small enum of its own rather than `crossterm::event::KeyEvent`, for the
-//! same reason [`analysis`](dxray_core::analysis) is not allowed to open a
-//! file: it puts every judgement on the side of the line that can be tested
-//! without the thing being judged. A test that drives this program types
-//! [`Key::Char`], not a struct with a modifier bitfield and a kind and a state.
-//!
-//! [`from_crossterm`] is the whole of the other side, and it is the only
-//! function in this crate that knows what a terminal event looks like.
+//! The keys this program has an opinion about. An enum of its own, so tests
+//! type [`Key::Char`]; [`from_crossterm`] is the only function that knows what
+//! a terminal event looks like.
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -33,13 +26,8 @@ pub enum Key {
     Interrupt,
 }
 
-/// What a terminal event means here, if it means anything.
-///
-/// Returns `None` for every event this program ignores, which is most of them:
-/// mouse movement, focus changes, bracketed paste, and the key *release* half
-/// of every press on terminals that report both. That last one matters more
-/// than it sounds — on a terminal with the Kitty keyboard protocol enabled,
-/// treating releases as presses moves the cursor two rows per keypress.
+/// What a terminal event means here, if anything. Releases are ignored: under
+/// the Kitty protocol they would move the cursor twice per keypress.
 #[must_use]
 pub fn from_crossterm(event: &Event) -> Option<Key> {
     let Event::Key(KeyEvent {
@@ -51,16 +39,12 @@ pub fn from_crossterm(event: &Event) -> Option<Key> {
     else {
         return None;
     };
-    // Repeats are distinct from presses in enhanced terminal protocols. They
-    // are deliberate input, unlike releases, and make held navigation keys
-    // behave like they do in every other terminal program.
+    // Repeats are deliberate input, so held navigation keys work.
     if !matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat) {
         return None;
     }
     if *modifiers == KeyModifiers::CONTROL {
-        // Only one control chord is claimed. Everything else is left alone
-        // rather than being flattened into its letter, so `Ctrl-L` does not
-        // silently type an `l` into the filter box.
+        // Only Ctrl-C is claimed, so `Ctrl-L` does not type an `l`.
         return match code {
             KeyCode::Char('c') => Some(Key::Interrupt),
             _ => None,
@@ -70,16 +54,12 @@ pub fn from_crossterm(event: &Event) -> Option<Key> {
         && matches!(*modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT))
         || (matches!(code, KeyCode::Tab) && *modifiers == KeyModifiers::SHIFT)
     {
-        // Crossterm represents Shift-Tab as `BackTab` on terminals that can
-        // distinguish it. Some terminal protocols instead retain `Tab` and
-        // put Shift in the modifiers, so support both encodings.
+        // Shift-Tab arrives as `BackTab` or as `Tab` plus Shift.
         return Some(Key::BackTab);
     }
     let key = match code {
-        // Crossterm reports a shifted printable key as its resolved character
-        // (for example `Q`), so Shift remains valid text input. Alt, Super and
-        // other modifiers are not text: swallowing them prevents shortcut
-        // chords from unexpectedly changing the filter.
+        // Shift is text (`Q` arrives resolved); Alt, Super and the rest are not,
+        // so chords never reach the filter.
         KeyCode::Char(c) if matches!(*modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT) => {
             Key::Char(*c)
         }
@@ -136,10 +116,7 @@ mod tests {
 
     #[test]
     fn a_key_release_is_not_a_second_keypress() {
-        // On a terminal that reports releases — anything speaking the Kitty
-        // keyboard protocol — counting them moves the cursor two rows for every
-        // one press, which reads as a broken program rather than as a terminal
-        // difference.
+        // Counting releases would move two rows per press.
         let release = Event::Key(KeyEvent {
             code: KeyCode::Down,
             modifiers: KeyModifiers::NONE,
@@ -199,9 +176,7 @@ mod tests {
 
     #[test]
     fn a_shifted_letter_is_the_letter_the_terminal_reports() {
-        // Crossterm resolves the shift itself, so an upper-case name typed into
-        // the filter arrives upper-cased. The filter lower-cases both sides, and
-        // this is the half that must not swallow the key.
+        // An upper-case letter reaches the filter as typed.
         assert_eq!(
             from_crossterm(&press(KeyCode::Char('Q'), KeyModifiers::SHIFT)),
             Some(Key::Char('Q'))

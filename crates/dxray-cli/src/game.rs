@@ -1,16 +1,6 @@
-//! The `game` listing: which executable in an install directory is the game.
-//!
-//! The judgement is `dxray-core`'s; this module only lays it out. It prints the
-//! whole ranking and then analyses the top of it, in that order, because the
-//! ranking is the part a reader has to be able to disagree with. A tool that
-//! printed the analysis alone would be naming one executable and hiding the
-//! three it beat.
-//!
-//! **Nothing here has been run against a real game install.** There was none on
-//! the machine it was written on. The layouts it handles correctly are the ones
-//! in the tests, which were written from documented engine conventions; whether
-//! those conventions hold across a library of shipped titles is exactly what
-//! this module cannot tell you.
+//! The `game` listing: every executable ranked, then the analysis of the best.
+//! The ranking comes first because it is what a reader must be able to
+//! disagree with.
 
 use std::fmt::Write as _;
 use std::io;
@@ -33,17 +23,9 @@ const REASON_INDENT: usize = 13;
 /// What a directory produced, and whether it should move the exit code.
 pub struct Outcome {
     pub text: String,
-    /// True when something was not read: the directory would not list, an
-    /// image would not parse, or the walk stopped at one of its bounds. A
-    /// truncated walk **is** a failure here, because this command was pointed
-    /// at one directory and a file in it went unlooked-at.
-    ///
-    /// A ranking with no import table behind it is not: everything was read and
-    /// this is what it says, which is the same division `steam` draws between
-    /// a problem and a caveat. Both commands ask
-    /// [`Survey::is_incomplete`](dxray_core::game::Survey::is_incomplete) for
-    /// the first half, so one directory cannot be complete on one surface and
-    /// incomplete on the other.
+    /// True when something was not read: the directory, an image, or the rest
+    /// of a truncated walk. A ranking with no import table behind it is not a
+    /// failure.
     pub failed: bool,
 }
 
@@ -54,11 +36,8 @@ pub fn inspect(dir: &Path, json: bool, presentation: report::Presentation) -> Ou
         Err(error) => return failure(dir, &error, json, presentation),
     };
     let Some(best) = survey.best() else {
-        // The directory listed fine and holds no program at all. Treated as a
-        // failure here, where the question asked was "which executable in this
-        // directory is the game" and there is no executable to answer with. In
-        // `steam`, which sweeps every install on the machine and meets games
-        // that are mid-download, the same state is reported and costs nothing.
+        // No executable to answer with: a failure here, unlike in `steam`,
+        // where a mid-download install is ordinary.
         return failure(
             dir,
             &"no executable found in this directory",
@@ -68,12 +47,7 @@ pub fn inspect(dir: &Path, json: bool, presentation: report::Presentation) -> Ou
     };
 
     let record = Record::read(&best.path);
-    // A bounded walk that hit its bound did not read every file, and the exit
-    // code has always answered exactly that question. It is also the only
-    // signal a script gets: the note explaining that the real binary may be
-    // below the limit is on stdout, where nothing reads it. The caveat that
-    // everything was read and says little — `NoRendererImported` — is not a
-    // failure and does not move it.
+    // A truncated walk fails the run; `NoRendererImported` does not.
     let failed = record.error.is_some() || survey.is_incomplete();
     let text = if json {
         let mut line = json_line(dir, &survey, &record);
@@ -119,9 +93,8 @@ pub fn inspect(dir: &Path, json: bool, presentation: report::Presentation) -> Ou
     Outcome { text, failed }
 }
 
-/// A directory that could not be surveyed at all, in whichever shape was asked
-/// for. It stays a row rather than becoming a missing one, so a harness can
-/// still line results up with inputs without counting.
+/// A directory that could not be surveyed at all, still one row so results
+/// line up with inputs.
 fn failure(
     dir: &Path,
     error: &dyn std::fmt::Display,
@@ -178,17 +151,9 @@ pub(crate) fn ranking_paths(dir: &Path, survey: &Survey, full_paths: bool) -> St
         reasons(&mut out, candidate);
     }
 
-    // The notes last, under everything they qualify. Printed on stdout with the
-    // listing rather than only on stderr, because a caveat that lives on the
-    // other stream is the half that gets lost when the output is pasted
-    // somewhere.
+    // The notes last, on stdout, so they survive a paste.
     if !survey.has_evidence() {
-        // Said first and said plainly. Every line above it reads "nothing
-        // observed", but the conclusion that follows from all of them together
-        // — there is no game in this directory — is the one thing a reader
-        // takes away, and the block printed underneath is an executable this
-        // tool has no argument for. A directory of leftover installers looks
-        // exactly like this, and so does a game this ranking cannot see.
+        // Said first and plainly: nothing argues any of these is the game.
         labelled(
             &mut out,
             "note",
@@ -205,9 +170,7 @@ pub(crate) fn ranking_paths(dir: &Path, survey: &Survey, full_paths: bool) -> St
 
 fn reasons(out: &mut String, candidate: &Candidate) {
     if candidate.reasons.is_empty() {
-        // Said out loud rather than left as a blank. A score of zero under a
-        // path with nothing under it reads as truncated output, and "nothing
-        // observed" is the actual finding for a Visual C++ redistributable.
+        // Said out loud: a blank would read as truncated output.
         for _ in 0..REASON_INDENT {
             out.push(' ');
         }
@@ -231,12 +194,8 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
     if n == 1 { one } else { many }
 }
 
-/// One JSONL line: the best candidate's record, then the survey appended.
-///
-/// The thirteen keys of a record come through untouched and in their order —
-/// the first eight of them are a frozen positional contract — and everything
-/// this mode adds goes after them. A harness that knows nothing about `game`
-/// reads such a line exactly as it reads any other.
+/// One JSONL line: the best candidate's record with its keys untouched and in
+/// order, then the survey appended.
 fn json_line(dir: &Path, survey: &Survey, record: &Record) -> String {
     let mut out = record.to_json();
     // Reopen the object. `to_json` always ends in `}` and never pretty-prints.
@@ -257,9 +216,7 @@ fn json_line(dir: &Path, survey: &Survey, record: &Record) -> String {
             if j > 0 {
                 out.push(',');
             }
-            // The kind is for a program and is stable; the sentence is for a
-            // person and is free to be reworded. Both, so neither consumer has
-            // to parse the other's.
+            // `kind` is stable for programs; the sentence may be reworded.
             out.push_str("{\"kind\":");
             push_quoted(&mut out, reason.kind());
             let _ = write!(out, ",\"weight\":{},\"says\":", reason.weight());
@@ -281,68 +238,34 @@ fn json_line(dir: &Path, survey: &Survey, record: &Record) -> String {
     out
 }
 
-/// What one game's directory produced for the `installed` and `steam` listing.
-///
-/// The rows are what gets printed; `incomplete` is what the exit code is drawn
-/// from; `carries_evidence` is what the listing orders by. They come back
-/// together so that a caller cannot render the caveat and forget the status, or
-/// the other way round — which is the exact divergence this type exists to
-/// prevent.
+/// What one game's directory produced for the listing: the rows, the caveats
+/// the exit code is drawn from, and the evidence answer it orders by.
 pub struct Best {
     pub rows: Vec<(&'static str, String)>,
     /// One entry per reason this game's directory was not searched in full,
     /// each naming the directory. Empty is the normal case.
     pub incomplete: Vec<String>,
-    /// Whether anything in this install argues it is a game, exactly as
-    /// [`Survey::has_evidence`] answered for it, or `None` when the install
-    /// directory could not be read and the question was never put.
-    ///
-    /// Carried out rather than consumed privately. The rows below already turn
-    /// on this answer — one of them says in words that nothing here carries
-    /// evidence — and the listing needs the same answer to decide where the
-    /// game goes. Computing it once and handing it over is what stops the
-    /// listing re-deriving it from the wording of a row, which is a second
-    /// place to be wrong about one question.
+    /// Whether anything in this install argues it is a game, as
+    /// [`Survey::has_evidence`] answered, or `None` when it could not be read.
     pub carries_evidence: Option<bool>,
 }
 
 impl Best {
-    /// True only when this install was read and nothing in it argues it is a
-    /// game, so the listing puts it under the ones that argue something.
-    ///
-    /// The rule is [`dxray_core::inspect::lacks_evidence`], shared with the
-    /// terminal browser's `no evidence` marker, so the two surfaces cannot end
-    /// up demoting different sets of installs.
+    /// True only when this install was read and argues nothing. The rule is
+    /// [`dxray_core::inspect::lacks_evidence`], shared with the terminal browser.
     #[must_use]
     pub fn lacks_evidence(&self) -> bool {
         dxray_core::inspect::lacks_evidence(self.carries_evidence)
     }
 }
 
-/// The listing's view of one game: the best candidate on one line, and any
-/// caveat that would otherwise be lost.
-///
-/// Deliberately short. A library can hold a hundred games and the full ranking
-/// for each of them would bury the listing, so this shows the answer and the
-/// single strongest reason for it. `dxray game <path>` shows the rest.
-///
-/// The ranking arrives already done, from
-/// [`dxray_core::inspect`](dxray_core::inspect()), rather than being asked for
-/// here. This function used to ask for it itself and asked without the game's
-/// title, while the terminal browser asked with it — so the two surfaces could
-/// name different executables as the game in one directory. Taking the survey
-/// as an argument is what makes that impossible rather than merely fixed.
-///
-/// The evidence answer leaves with the rows, in [`Best::carries_evidence`]. It
-/// is needed here anyway — one of the rows below says in words that nothing in
-/// this directory carries any — and the listing that orders by it would
-/// otherwise have to ask a second time or read it back out of a sentence.
+/// The listing's view of one game: the best candidate and its strongest
+/// reason, plus every caveat. The survey comes from
+/// [`dxray_core::inspect`](dxray_core::inspect()), so both surfaces rank alike.
 pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> Best {
     let survey = match survey {
         Ok(survey) => survey,
-        // Named, not swallowed. A manifest for a game that is mid-download or
-        // mid-removal points at a directory that is not there yet, and that is
-        // a fact about the install worth printing.
+        // Named, not swallowed: a mid-download game points at no directory yet.
         Err(error) => {
             let row = ("best", format!("(directory could not be read: {error})"));
             // Share the launcher's root-error policy with the terminal browser
@@ -355,16 +278,12 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
             return Best {
                 rows: vec![row],
                 incomplete,
-                // Nothing was read, so nothing can be said either way, and the
-                // listing must not shuffle this down among the directories it
-                // did read and found empty.
+                // Never read: it keeps its place beside the games.
                 carries_evidence: None,
             };
         }
     };
-    // Asked once, of core, and then carried. Every use below is this value:
-    // the sentence a person reads and the group the game is printed in are one
-    // answer to one question, not two questions that happen to agree today.
+    // Asked once and carried: the row and the grouping are one answer.
     let carries_evidence = survey.has_evidence();
     let Some(best) = survey.best() else {
         return Best {
@@ -385,14 +304,10 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
             .reasons
             .first()
             .map_or_else(String::new, ToString::to_string);
-        // The tie is not computed here. It arrives as `Note::TiedAtTheTop`,
-        // from the same place `game` gets it, so the two surfaces cannot end
-        // up disagreeing about whether one run had a tie in it.
+        // The tie arrives as `Note::TiedAtTheTop`, as it does for `game`.
         rows.push(("best", format!("{shown}  ({}: {why})", best.score())));
     } else {
-        // The caveat cannot be left to the `game` view. A row reading
-        // "vcredist_x64.exe (0: )" under a Steam title reads as an answer, and
-        // the number is not what anybody takes away from it.
+        // A zero-score row would read as an answer without this caveat.
         rows.push((
             "best",
             format!("(nothing here carries evidence of being a game; the highest ranked of {} executables is {shown})",
@@ -401,29 +316,15 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
     }
 
     for note in &survey.notes {
-        // Every note, not a chosen few: the ones that say the walk stopped
-        // early are the ones a short listing would most like to drop. Only the
-        // one that fires on a large share of a library is shortened, and it is
-        // shortened rather than dropped, with a pointer at the full sentence.
+        // Every note; only the one common across a library is shortened.
         let text = match note {
             Note::NoRendererImported { .. } => {
                 "nothing here imports a graphics API, so this ranking rests on directory \
                  structure alone; dxray game on this path explains what that means"
                     .to_owned()
             }
-            // Shortened for the same reason and never dropped. This is the one
-            // line in a hundred-game listing that says the name beside it was
-            // not chosen by the evidence, and a summary that omits it is the
-            // omission the whole slice was built to refuse.
-            // `saturating_sub`, not `- 1`. `count` is a public field of a
-            // public enum, so its "always at least two" invariant is enforced
-            // by `tie_at_the_top` and by nothing the compiler knows about. A
-            // caller constructing the note by hand with a zero would panic in a
-            // debug build and print 18446744073709551615 in a release one, and
-            // the release half of that is exactly the shape this project
-            // refuses: a wrong answer wearing the clothes of a right one.
-            // Nothing reaches it today; this is what it costs to keep it that
-            // way, and the field cannot be made private while the variant is.
+            // Shortened, never dropped. `saturating_sub`: `count` is a public
+            // field, so a hand-built zero must not wrap.
             Note::TiedAtTheTop { count, .. } => format!(
                 "tied with {} other{}, which game lists; the evidence does not choose \
                  between them",
@@ -441,12 +342,8 @@ pub fn best_rows(install_dir: &Path, survey: io::Result<dxray_core::Survey>) -> 
     }
 }
 
-/// The notes that mean something in this game's directory was never looked at.
-///
-/// The selection is [`Survey::incomplete_notes`], so that `game`, `steam`
-/// and the terminal browser draw the line in the same place and a person cannot
-/// get one story from one surface and a different one from the other. This
-/// function only words them; it decides nothing.
+/// The notes that mean something in this game's directory was never looked
+/// at, selected by [`Survey::incomplete_notes`] and worded here.
 fn incomplete_notes(install_dir: &Path, survey: &Survey) -> Vec<String> {
     survey
         .incomplete_notes()
@@ -511,9 +408,7 @@ mod tests {
 
     #[test]
     fn the_listing_shows_every_candidate_and_not_only_the_one_it_would_analyse() {
-        // The whole principle of the slice. Naming the winner and hiding the
-        // executables it beat is lying by omission, and a reader has to be able
-        // to see the one this tool got wrong.
+        // Naming the winner and hiding what it beat would be lying by omission.
         let text = ranking(Path::new("/games/App"), &survey());
 
         assert!(text.contains("App-Win64-Shipping.exe"), "got:\n{text}");
@@ -593,10 +488,7 @@ mod tests {
 
     #[test]
     fn a_directory_with_no_game_in_it_says_so_instead_of_leaving_it_to_be_inferred() {
-        // Every candidate line reads "nothing observed", but the conclusion
-        // that follows from all of them together is the part a reader takes
-        // away — and the analysis block printed underneath would otherwise look
-        // like an answer.
+        // Nothing observed anywhere: the analysis below must not read as an answer.
         let redist = Survey::ranked(
             vec![Candidate {
                 path: PathBuf::from("/games/App/vcredist_x64.exe"),
@@ -683,16 +575,7 @@ mod tests {
 
     #[test]
     fn a_tie_count_below_two_is_worded_oddly_rather_than_catastrophically() {
-        // `Note::TiedAtTheTop::count` is a public field of a public enum, so
-        // its "always at least two" invariant is a sentence in `dxray-core` and
-        // nothing the compiler enforces. `count - 1` on a zero panics in a
-        // debug build and prints 18446744073709551615 in a release one, and the
-        // release half of that is the shape this project refuses: a wrong
-        // answer dressed as a right one, in the row that exists to say the
-        // evidence did not choose.
-        //
-        // Nothing constructs a zero today. This is what keeps that from being
-        // the only thing standing between a reader and that number.
+        // `count` is public, so a hand-built zero must not print a wrapped number.
         let odd = best_rows(
             Path::new("/games/App"),
             Ok(Survey::ranked(
@@ -717,9 +600,7 @@ mod tests {
 
     #[test]
     fn a_directory_that_could_not_be_read_is_not_a_directory_that_argued_nothing() {
-        // An absent answer and an answer of "nothing" must not look alike. This
-        // one was never asked, so it keeps its place beside the games and the
-        // row says what happened to it.
+        // Never asked is not "nothing": it keeps its place and says why.
         let unread = best_rows(
             Path::new("/games/Gone"),
             Err(io::Error::new(io::ErrorKind::NotFound, "no such directory")),
@@ -739,9 +620,7 @@ mod tests {
 
     #[test]
     fn a_demoted_game_says_in_its_own_row_what_a_marker_would_have_said() {
-        // Why this listing appends no ` no evidence` marker: the browser's list
-        // column shows a headline, so it needs one; the column here is already
-        // the sentence, and repeating it would be a second wording for one fact.
+        // No ` no evidence` marker here: the row is already the sentence.
         let nothing = best_rows(
             Path::new("/games/App"),
             Ok(Survey::ranked(

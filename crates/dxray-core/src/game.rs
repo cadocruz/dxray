@@ -1,136 +1,63 @@
 //! Which executable in an install directory is the game? Rank, and explain.
 //!
-//! Pure in the same sense as [`analysis`](crate::analysis): nothing here opens
-//! a file. It reads the *shape* of a path — the stem, the directories above it,
-//! the names of the directories beside it — because that shape is evidence, but
-//! it never asks the filesystem a question. [`install`](crate::install) does
-//! that and hands the answers over as [`Observed`].
+//! Pure: nothing here opens a file. [`install`](crate::install) walks the
+//! directory and hands the facts over as [`Observed`].
 //!
-//! Four ideas shape everything below.
-//!
-//! **Rank and explain; never pick.** A real install holds a launcher at the
-//! root, the shipping binary several directories down, a crash handler, and
-//! installers for Visual C++ that were never removed. The launcher and the game
-//! are both correct answers to different questions, so the result is an ordered
-//! list where every entry carries the reasons it scored as it did. A tool that
-//! names one and hides the other is lying by omission.
-//!
-//! **No exclusion lists.** `vcredist_x64.exe` and `UnityCrashHandler64.exe` sink
-//! because they carry no evidence, not because they are on a list of names.
-//! Every such list is a guess that eventually hides a real game — the same
-//! argument [`steam::games`](crate::steam::games) makes for not filtering
-//! manifests. Every reason in [`Reason`] is something observed about the file or
-//! its directory, and a binary with none of them scores zero on its own merits.
-//!
-//! **Evidence is per-directory, and that is not the install root.** An Unreal
-//! game's executable lives in `Binaries/Win64` and its upscaler DLLs live there
-//! with it, not at the root. Attributing root-level neighbours to a binary three
-//! levels down would make every executable in the tree look equally equipped, so
-//! [`Observed::directory`] is the verdict for the candidate's **own** directory
-//! and nothing else.
-//!
-//! **The strongest signal is missing for a whole class of real games, and the
-//! answer has to say so.** A Java or LWJGL title, an Electron game, a .NET one —
-//! none of them import a graphics API, because the runtime loads it with
-//! `LoadLibrary` after startup. The structural signals still rank them, but a
-//! ranking with no import table under it must not be presented as confidently
-//! as one that has it, so [`Note::NoRendererImported`] rides back with the list
-//! and [`Survey::ranked`] raises it where no caller can forget to.
-//!
-//! **A directory-level signal cannot break a tie inside its own directory.**
-//! Every executable in one folder shares its neighbours, so `nvngx_dlss.dll`
-//! sitting beside both the game and the crash handler says the same thing about
-//! both. Signals of that kind are weighted lowest on purpose: they discriminate
-//! across directories, which is the only place they carry information.
+//! - **Rank and explain; never pick.** The result is an ordered list where
+//!   every entry carries the reasons it scored as it did.
+//! - **No exclusion lists.** A redistributable sinks because it carries no
+//!   evidence, not because its name is on a list.
+//! - **Evidence is per directory.** [`Observed::directory`] describes the
+//!   candidate's own directory only, never the install root.
+//! - **Say when the strongest signal is missing.** Java, Electron and .NET
+//!   games import no graphics API, so [`Note::NoRendererImported`] travels
+//!   with such a ranking.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::analysis::{Source, Verdict};
 
-/// The weight of each reason, in one table so the ranking can be read at a
-/// glance rather than reconstructed from a `match`.
+/// The weight of each reason. The numbers are an ordering, not measurements.
 ///
-/// The numbers are not measurements. They are an ordering, chosen so that the
-/// cases in `tests` come out in the order a person would defend, and every one
-/// of them is a place where a real install could prove this module wrong. They
-/// are public so that a caller who disagrees can say by how much.
-///
-/// # Every weight here is positive, and that is load-bearing
-///
-/// Because no reason is worth nothing and none is worth less than nothing, a
-/// candidate that [`assess`] built scores zero **exactly** when its reasons are
-/// empty. [`Candidate::score`] and [`Candidate::has_evidence`] therefore cannot
-/// disagree, and neither can the two surfaces built on them: the TUI marks a
-/// row `no evidence` from [`Survey::has_evidence`], which counts reasons across
-/// the install, while its detail pane says "nothing observed argues that this
-/// is the game" from the reasons of the one executable that ranked first. A
-/// weight of zero, or a negative one cancelling a positive, would let a row
-/// carry no marker while the pane under it said nothing was observed.
-///
-/// A new reason worth zero therefore does not belong here; it belongs in
-/// [`Note`], which is where this module puts something worth saying that is not
-/// worth scoring. `tests::every_reason_assess_can_build_is_worth_more_than_nothing`
-/// is the guard.
-///
-/// The one arm of [`Reason::weight`] that returns zero — a `LinksRenderer`
-/// carrying [`Source::Neighbour`] — is not an exception to this. [`assess`]
-/// cannot build it, and the zero exists precisely so that a caller who
-/// hand-builds one gets no credit for evidence that variant does not mean.
+/// Every weight is positive, so a candidate scores zero exactly when it has no
+/// reasons, and [`Candidate::score`] and [`Candidate::has_evidence`] cannot
+/// disagree. Something worth saying but not scoring belongs in [`Note`].
 pub mod weight {
     /// The image's own import table names a graphics API. The process cannot
     /// start without it.
     pub const RENDERER_IMPORT: i32 = 100;
 
-    /// A subdirectory named `<stem>_Data` sits beside `<stem>.exe`.
-    ///
-    /// As strong as a load-time import, and deliberately so. Unity's player
-    /// refuses to start without that directory and the name is derived from the
-    /// executable's own, so the pairing cannot arise by accident. It has to be
-    /// this strong: a Unity game's `.exe` is a stub that imports no graphics API
-    /// at all, and a table that ranked imports above layout would rank every
-    /// Unity game below its own crash handler the moment the handler picked up
-    /// any other signal.
+    /// A subdirectory named `<stem>_Data` sits beside `<stem>.exe`. As strong
+    /// as an import: a Unity executable is a stub that imports no graphics API.
     pub const UNITY_DATA: i32 = 100;
 
     /// The image delay-loads a graphics API: real, but the call may never
     /// happen.
     pub const RENDERER_DELAY_IMPORT: i32 = 80;
 
-    /// A library in the image's own directory, which the image imports, reaches
-    /// a graphics API. Weaker than reaching one directly, because the chain has
-    /// one more link in it that this crate did not watch being followed.
+    /// A library beside the image, which the image imports, reaches a graphics
+    /// API: one link weaker than reaching it directly.
     pub const RENDERER_INDIRECT: i32 = 70;
 
     /// The image sits in `Binaries/Win64` or `Binaries/Win32`.
     pub const UNREAL_BINARIES: i32 = 55;
 
-    /// The stem ends `-Shipping`, which is what Unreal calls a release build.
-    ///
-    /// Together with [`UNREAL_BINARIES`] this outweighs a lone load-time import,
-    /// and that is the intended answer: `Binaries/Win64/Thing-Win64-Shipping.exe`
-    /// is a packaging convention that essentially nothing but Unreal produces,
-    /// while a launcher built on an embedded browser imports `d3d11.dll` for its
-    /// own compositor and means nothing by it.
+    /// The stem ends `-Shipping`, Unreal's release build. With
+    /// [`UNREAL_BINARIES`] it outweighs a lone import, which an embedded
+    /// browser launcher also has.
     pub const SHIPPING_SUFFIX: i32 = 50;
 
-    /// The stem and the game's name are the same word.
-    ///
-    /// Deliberately below every structural reason, because a name is the
-    /// weakest kind of identity evidence there is and its absence has to cost
-    /// nothing: `PUBG: BATTLEGROUNDS` ships `TslGame.exe`, which resembles its
-    /// own title not at all. A signal that can be right about a game and say
-    /// nothing about the next one must never be able to outvote the layout.
+    /// The stem and the game's name are the same word. Below every structural
+    /// reason: names often differ (`TslGame.exe` is PUBG), so a name must not
+    /// outvote the layout.
     pub const NAME_EXACT: i32 = 30;
 
     /// One of the stem and the game's name contains the other.
     pub const NAME_PARTIAL: i32 = 15;
 
-    /// The image's own directory ships graphics libraries — an upscaler, a
-    /// vendor SDK, the Direct3D 12 Agility runtime.
-    ///
-    /// Lowest, because it is a fact about the directory rather than about any
-    /// binary in it. See the module documentation.
+    /// The image's own directory ships graphics libraries. Lowest: it says the
+    /// same about every executable in that directory.
     pub const SHIPS_GRAPHICS_LIBRARIES: i32 = 15;
 }
 
@@ -143,12 +70,8 @@ pub enum Resemblance {
     Partial,
 }
 
-/// Where the name a stem was compared against came from.
-///
-/// Kept because the two are worth different amounts of trust and a reader
-/// should not have to guess which one was used. A name out of a Steam manifest
-/// is evidence from a different source; the directory's own name is the same
-/// install talking about itself.
+/// Where the name a stem was compared against came from. A supplied name is
+/// independent evidence; the directory's own name is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameFrom {
     /// Supplied by the caller — from a Steam manifest, or typed.
@@ -157,39 +80,21 @@ pub enum NameFrom {
     Directory,
 }
 
-/// One observed fact that argues this executable is the game.
-///
-/// Every variant is something seen in the file or in the directory it sits in.
-/// There is no variant meaning "this name looks like a launcher", and there must
-/// not be: that is the guess-list this module exists to avoid.
-///
-/// There are no negative reasons either. A binary with nothing to say about
-/// itself scores zero and sinks, which is the same outcome with none of the risk
-/// of scoring a real game below zero for having an unlucky name.
+/// One observed fact that argues this executable is the game. There are no
+/// negative reasons and no "looks like a launcher" reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
     /// The image's own import or delay-import table names a graphics API.
-    ///
-    /// **Never built from a neighbouring file.** A `d3d12core.dll` in the
-    /// directory is a fact about the directory, shared by every executable in
-    /// it, and it arrives as [`Reason::ShipsGraphicsLibraries`] instead.
+    /// Never built from a neighbouring file.
     LinksRenderer {
         /// Every API reached, in the order [`analyse`](crate::analyse) reports.
         apis: Vec<String>,
         /// The strongest way any of them was reached.
         source: Source,
     },
-    /// A library in the image's own directory, which the image imports, reaches
-    /// a graphics API.
-    ///
-    /// This is the signal that keeps Unity games above their own crash
-    /// handlers on evidence rather than on layout alone: `Game.exe` imports
-    /// `UnityPlayer.dll`, and it is `UnityPlayer.dll` that imports `d3d11.dll`.
-    /// The chain is followed exactly one link, and only into files sitting in
-    /// the candidate's own directory.
-    ///
-    /// Only raised when the image reaches no renderer directly, so the two
-    /// never stack into a double count of one capability.
+    /// A library beside the image, which the image imports, reaches a graphics
+    /// API, as a Unity stub does through `UnityPlayer.dll`. Followed one link,
+    /// and only raised when the image reaches no renderer itself.
     LinksRendererThrough {
         /// The local libraries that reached one, sorted.
         libraries: Vec<String>,
@@ -202,13 +107,8 @@ pub enum Reason {
         /// The directory as it was spelled on disk.
         directory: String,
     },
-    /// The executable sits in `Binaries/Win64` or `Binaries/Win32`.
-    ///
-    /// Not raised for `Engine/Binaries/Win64`, which is where an Unreal install
-    /// keeps the engine's own tools — the crash reporter above all. That is a
-    /// statement about the layout, not a guess about the name of the binary
-    /// inside it: the game's own `Binaries` directory is a sibling of `Engine`,
-    /// never a child of it.
+    /// The executable sits in `Binaries/Win64` or `Binaries/Win32`, but not
+    /// under `Engine`, which holds the engine's own tools.
     UnrealBinariesDirectory {
         /// The two directory names as they were spelled, joined by a slash.
         directory: String,
@@ -230,12 +130,8 @@ pub enum Reason {
 }
 
 impl Reason {
-    /// The stable spelling used in machine-readable output.
-    ///
-    /// Rendered by callers instead of `Debug`, which is free to change, and
-    /// alongside the [`Display`](std::fmt::Display) sentence rather than instead
-    /// of it: the sentence is for a person and is allowed to be reworded, this
-    /// is for a program and is not.
+    /// The stable spelling used in machine-readable output; the `Display`
+    /// sentence is for people and may be reworded.
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -253,19 +149,13 @@ impl Reason {
     #[must_use]
     pub fn weight(&self) -> i32 {
         match self {
-            // `Source::Neighbour` cannot reach this variant — `assess` builds it
-            // from import tables only — and is scored at nothing rather than at
-            // something flattering, so that a future caller constructing one by
-            // hand gets no credit for evidence this variant does not mean.
+            // `assess` never builds this with `Source::Neighbour`; a hand-built
+            // one gets no credit.
             Self::LinksRenderer { source, .. } => match source {
                 Source::Import => weight::RENDERER_IMPORT,
                 Source::DelayImport => weight::RENDERER_DELAY_IMPORT,
-                // Reached through a local library. The ranking builds its own
-                // evidence without this source and reaches the same conclusion
-                // by its own route, as `Reason::LinksRendererThrough`, so this
-                // arm is not taken today. It carries the same weight as that
-                // reason so the two cannot drift if the evidence ever arrives
-                // here instead.
+                // Not built today; weighted like `LinksRendererThrough` so the
+                // two cannot drift.
                 Source::Linked => weight::RENDERER_INDIRECT,
                 Source::Neighbour => 0,
             },
@@ -340,18 +230,12 @@ fn join_or(parts: &[String]) -> String {
 pub struct Candidate {
     /// The executable, spelled as it will be reported.
     pub path: PathBuf,
-    /// Every reason found, strongest first. Empty means nothing was observed —
-    /// which is the honest answer for a Visual C++ redistributable, and is
-    /// reported as such rather than hidden.
+    /// Every reason found, strongest first. Empty means nothing was observed.
     pub reasons: Vec<Reason>,
 }
 
 impl Candidate {
-    /// The sum of the weights of the reasons.
-    ///
-    /// Computed rather than stored, so the score and the reasons printed beside
-    /// it cannot drift apart. There is no way to hold a `Candidate` whose number
-    /// is not exactly the arithmetic of the sentences under it.
+    /// The sum of the reasons' weights, computed so it always matches them.
     #[must_use]
     pub fn score(&self) -> i32 {
         self.reasons.iter().map(Reason::weight).sum()
@@ -363,12 +247,8 @@ impl Candidate {
         !self.reasons.is_empty()
     }
 
-    /// True when an import table — this image's own, or that of a library
-    /// beside it — named a graphics API.
-    ///
-    /// The distinction the whole [`Note::NoRendererImported`] caveat turns on:
-    /// a structural signal says where a file sits, and only this one says the
-    /// loader will be asked for a renderer.
+    /// True when an import table, this image's own or a library's beside it,
+    /// named a graphics API.
     #[must_use]
     pub fn reaches_renderer(&self) -> bool {
         self.reasons.iter().any(|reason| {
@@ -380,12 +260,8 @@ impl Candidate {
     }
 }
 
-/// Something true about a survey that makes it worth less than it looks.
-///
-/// The same idea as [`steam::Note`](crate::steam::Note) and for the same
-/// reason. A truncated walk that reports the launcher because it never reached
-/// the real binary is the wrong-answer shape this crate exists to refuse, so
-/// every limit that was hit is carried back with the answer.
+/// Something true about a survey that makes it worth less than it looks. Every
+/// limit the walk hit is carried back with the answer.
 #[derive(Debug)]
 pub enum Note {
     /// Directories below [`MAX_DEPTH`](crate::install::MAX_DEPTH) were not
@@ -400,53 +276,21 @@ pub enum Note {
     /// The walk stopped after [`MAX_EXECUTABLES`](crate::install::MAX_EXECUTABLES).
     ExecutableLimited { limit: usize },
     /// A directory below the root could not be listed. Not fatal: the rest of
-    /// the tree is still worth ranking, and a permission error on one folder
-    /// must not sink a survey that is otherwise complete.
+    /// the tree is still ranked.
     Unreadable { path: PathBuf, source: io::Error },
-    /// An executable was found but could not be read or parsed. It stays in the
-    /// list with whatever its path still says about it, because "the game is
-    /// the corrupt one" is an answer somebody needs.
+    /// An executable could not be read or parsed. It stays in the list, ranked
+    /// on its path alone.
     Unparsed { path: PathBuf, source: io::Error },
-    /// Not one executable in the survey reaches a graphics API through its
-    /// import tables, so the ranking rests on directory structure alone.
-    ///
-    /// This is the caveat that keeps the ranking honest for an entire class of
-    /// real games. A Java or LWJGL title (`Project Zomboid`, `Minecraft`), an
-    /// Electron game, a .NET or `MonoGame` one — none of them import a renderer,
-    /// because the runtime loads it with `LoadLibrary` long after startup. The
-    /// process that actually draws `Project Zomboid` is `jre64/bin/java.exe`,
-    /// buried in a subdirectory, and it imports nothing graphical either.
-    ///
-    /// It is also a finding in its own right rather than only an apology. An
-    /// executable that imports no graphics API behaves differently under an
-    /// injector than one that imports `d3d11.dll`, and that is worth telling
-    /// somebody whether or not they asked which binary is the game.
+    /// No executable reaches a graphics API through its import tables, so the
+    /// ranking rests on directory structure alone. Normal for Java, Electron
+    /// and .NET games, which load their renderer at run time.
     NoRendererImported {
         /// How many executables were read and found to import none.
         executables: usize,
     },
-    /// Two or more executables share the highest score, so the evidence does
-    /// not choose between them.
-    ///
-    /// The one case where printing a list best-first is itself a claim the
-    /// evidence does not support. Whatever is at the top of a tie got there by
-    /// the presentation rule in [`Survey::ranked`] — shallower path, then
-    /// alphabetical — and a reader has no way to tell that from a result the
-    /// evidence actually separated. This slice exists to rank rather than pick,
-    /// and an unreported tie at the top is picking with extra steps.
-    ///
-    /// **Raised without any idea of what caused the tie**, and that is the
-    /// design. Two builds of one game shipped side by side tie because both are
-    /// real. A game ties with an Electron application, or with a security
-    /// product, because importing `d3d11.dll` is ordinary behaviour for a great
-    /// deal of software that is not a game. A rule that had to recognise the
-    /// category would one day meet a category it did not recognise; a tie is a
-    /// tie, and the sentence is the same either way.
-    ///
-    /// Only raised when the shared score is above zero. A directory of
-    /// installers where everything ties at nothing is already described by
-    /// [`Survey::has_evidence`], in a sentence that says more than this one
-    /// would.
+    /// Two or more executables share the highest score above zero, so the
+    /// order among them is presentation, not evidence. Raised without guessing
+    /// what caused the tie.
     TiedAtTheTop {
         /// How many candidates share the top score. Always at least two.
         count: usize,
@@ -456,19 +300,8 @@ pub enum Note {
 }
 
 impl Note {
-    /// True when the note means something was **not read**, rather than that
-    /// what was read says less than usual.
-    ///
-    /// The line between "not read" and "read, and says little", and the two
-    /// sides of it are not the same kind of thing. Every surface asks it
-    /// through [`Survey::is_incomplete`], which is the same line for
-    /// `dxray --game` and for a listing.
-    ///
-    /// A walk that stopped at a limit, a directory that could not be opened, a
-    /// file that would not parse — in each of those the answer printed may be
-    /// wrong because the right answer was never looked at, and a script has to
-    /// be able to tell. [`Note::NoRendererImported`] is
-    /// the other kind: everything was read, and this is what it says.
+    /// True when something was not read, rather than read and found to say
+    /// little. [`Survey::is_incomplete`] applies it for every surface.
     #[must_use]
     pub fn is_incomplete(&self) -> bool {
         match self {
@@ -540,10 +373,6 @@ impl std::fmt::Display for Note {
 }
 
 /// The ranked executables in one directory, and what qualifies the ranking.
-///
-/// Two lists rather than a `Vec<Candidate>` and a silent truncation, for the
-/// reason spelled out on [`Note`]: the shape of a wrong answer here is a short
-/// list that looks complete.
 #[derive(Debug, Default)]
 pub struct Survey {
     /// Best first. Ties broken by path, so two runs over one install produce
@@ -553,26 +382,12 @@ pub struct Survey {
 }
 
 impl Survey {
-    /// Sorts `candidates`, raises [`Note::NoRendererImported`] if it applies,
-    /// and builds the survey.
-    ///
-    /// Both happen here rather than in a separate call the caller makes
-    /// afterwards. A `Survey` whose caller forgot to rank it is a ranked list in
-    /// name only, and one whose caller forgot the caveat is the confident wrong
-    /// answer this module exists to refuse. Neither is reachable.
+    /// Sorts `candidates` and raises the notes that apply, so no caller can
+    /// forget either.
     #[must_use]
     pub fn ranked(mut candidates: Vec<Candidate>, mut notes: Vec<Note>) -> Self {
-        // Descending score; then, among equals, the shallower path and then the
-        // alphabetical one. Not `sort_by_key` with a negated score: the path is
-        // borrowed from the element being compared.
-        //
-        // The depth is a **presentation** rule and not a signal. It scores
-        // nothing and appears in no explanation: it decides only the order of
-        // candidates the evidence could not separate, and it is there because
-        // the alternative sorted a launcher at the install root below a
-        // redistributable four directories down for no reason a reader could
-        // see. Between two files with identical evidence there is no right
-        // answer, and this at least puts the one nearer the front door first.
+        // Descending score, then shallower path, then alphabetical. Depth only
+        // orders what the evidence could not separate; it is not a signal.
         candidates.sort_by(|a, b| {
             b.score()
                 .cmp(&a.score())
@@ -590,66 +405,30 @@ impl Survey {
         Self { candidates, notes }
     }
 
-    /// The highest-ranked executable, if any were found at all.
-    ///
-    /// Returns the top of the list even when it carries no evidence. Deciding
-    /// that a zero-scoring candidate is not worth returning would be this
-    /// module picking, and it does not pick — [`Candidate::has_evidence`] lets
-    /// the caller say so in its own words.
+    /// The highest-ranked executable, even when it carries no evidence.
     #[must_use]
     pub fn best(&self) -> Option<&Candidate> {
         self.candidates.first()
     }
 
     /// True when at least one executable had something to say for itself.
-    ///
-    /// False for a directory holding only redistributables, which is a real
-    /// state worth reporting and not the same as an empty directory.
+    /// False for a directory of redistributables, which is not an empty one.
     #[must_use]
     pub fn has_evidence(&self) -> bool {
         self.candidates.iter().any(Candidate::has_evidence)
     }
 
-    /// The notes saying part of this directory was never looked at.
-    ///
-    /// The selection every surface prints from, so that a reader cannot be
-    /// shown one set of unread-file notes by `--game` and a different set by
-    /// `--steam` for the same directory. Exactly [`Note::is_incomplete`],
-    /// applied in one place.
+    /// The notes saying part of this directory was never looked at: exactly
+    /// [`Note::is_incomplete`], applied in one place.
     pub fn incomplete_notes(&self) -> impl Iterator<Item = &Note> {
         self.notes.iter().filter(|note| note.is_incomplete())
     }
 
-    /// True when part of this directory was never looked at.
+    /// True when part of this directory was never looked at: the one
+    /// completeness question every surface asks.
     ///
-    /// The one question every surface asks about a survey's completeness:
-    /// `dxray --game`, the `--installed` and `--steam` listings, and the
-    /// terminal browser. There is no second, narrower version of it for
-    /// listings.
-    ///
-    /// # Why a listing may not narrow this by evidence
-    ///
-    /// A listing inspects everything a launcher declares, Proton builds and
-    /// container sysroots included, so it is tempting to charge a truncation
-    /// only to entries that carry evidence of being a game — the tool
-    /// directories would stop costing an exit code on a healthy machine. It is
-    /// unsound, and not by a margin that tuning could close. `has_evidence` is
-    /// only ever consulted here when the walk already truncated, and a
-    /// truncated walk is itself an explanation for finding no evidence: the
-    /// evidence may be the part that was not read. The question is asked in
-    /// exactly the situation where it cannot answer.
-    ///
-    /// Measured: a Steam install holding a zero-evidence `launcher.exe` at its
-    /// root and the real `Game-Win64-Shipping.exe` below the bound listed as
-    /// one game, with no caveat and an exit code of 0, while the row beside it
-    /// said nothing there carried evidence of being a game. That is the
-    /// wrong-answer shape [`install`](crate::install) bounds the walk to avoid,
-    /// one level up.
-    ///
-    /// Tool directories are therefore addressed where the problem is — a bound
-    /// no real install reaches, see
-    /// [`MAX_DEPTH`](crate::install::MAX_DEPTH) — and not by teaching the exit
-    /// code to guess which truncations mattered.
+    /// Not narrowed by evidence. A truncated walk may have missed the very
+    /// executable that carried it, so "no evidence" cannot excuse a truncation.
     #[must_use]
     pub fn is_incomplete(&self) -> bool {
         self.incomplete_notes().next().is_some()
@@ -662,14 +441,8 @@ fn depth(candidate: &Candidate) -> usize {
     candidate.path.components().count()
 }
 
-/// [`Note::TiedAtTheTop`], if the highest score is shared.
-///
-/// Called on an already-sorted list, so the tied candidates are the run at the
-/// front and counting stops at the first lower score.
-///
-/// A score of zero is left alone deliberately: every candidate in a directory
-/// of installers ties there, and [`Survey::has_evidence`] already gives the
-/// caller a better sentence for that than "five things tie at nothing" would be.
+/// [`Note::TiedAtTheTop`], if the highest score is shared. `candidates` is
+/// already sorted. A shared score of zero is left to [`Survey::has_evidence`].
 fn tie_at_the_top(candidates: &[Candidate]) -> Option<Note> {
     let best = candidates.first()?;
     let score = best.score();
@@ -683,18 +456,14 @@ fn tie_at_the_top(candidates: &[Candidate]) -> Option<Note> {
     Some(Note::TiedAtTheTop { count, score })
 }
 
-/// Everything [`install`](crate::install) saw about one executable.
-///
-/// Built by the IO half, or by hand in a test. Deliberately a plain struct of
-/// already-gathered facts: every judgement made about them is in [`assess`],
-/// where it can be tested against an awkward layout without a disk or a game.
+/// Everything [`install`](crate::install) saw about one executable, as plain
+/// facts; the judgement is in [`assess`].
 #[derive(Debug, Default, Clone)]
 pub struct Observed {
     /// The executable, spelled as it should be reported.
     pub path: PathBuf,
-    /// The same file relative to the directory that was surveyed. This is what
-    /// the layout rules read, so that an install that happens to live under a
-    /// folder called `Binaries` does not hand every binary in it a reason.
+    /// The same file relative to the surveyed directory, which is what the
+    /// layout rules read.
     pub relative: PathBuf,
     /// Names of the subdirectories sitting beside the executable.
     pub sibling_directories: Vec<String>,
@@ -706,12 +475,8 @@ pub struct Observed {
     pub directory: Verdict,
 }
 
-/// Reads `observed` and lists every reason it is the game.
-///
-/// `supplied_name` is the title from a Steam manifest, or whatever the caller
-/// knows. `directory_name` is the name of the directory that was surveyed. Both
-/// are optional and the better of the two matches is used, once — a stem that
-/// resembles both is one piece of evidence, not two.
+/// Reads `observed` and lists every reason it is the game. The better of the
+/// two name matches is used, once.
 #[must_use]
 pub fn assess(
     observed: &Observed,
@@ -728,11 +493,8 @@ pub fn assess(
     if let Some(reason) = links_renderer(&observed.own) {
         reasons.push(reason);
     } else if let Some(reason) = links_renderer_through(&observed.own) {
-        // Only when nothing was reached directly. A binary that imports
-        // `d3d12.dll` *and* ships a library that imports it too has one
-        // capability, not two, and scoring it twice would let a well-stocked
-        // directory outrank a game on the strength of the same fact counted
-        // again.
+        // Only when nothing was reached directly: one capability is not scored
+        // twice.
         reasons.push(reason);
     }
 
@@ -752,9 +514,7 @@ pub fn assess(
         reasons.push(reason);
     }
 
-    // Strongest first, stably, so two reasons of equal weight keep the order
-    // they were gathered in and the sentence under a candidate reads the same
-    // way on every run.
+    // Strongest first, stably, so equal weights keep their order.
     reasons.sort_by_key(|reason| -reason.weight());
     Candidate {
         path: observed.path.clone(),
@@ -762,21 +522,15 @@ pub fn assess(
     }
 }
 
-/// The renderers the image itself reaches, if any.
-///
-/// Findings whose only support is a neighbouring file are dropped here rather
-/// than filtered upstream, so that a caller who builds an [`Observed`] by hand
-/// and fills `own` with a full verdict still cannot smuggle a directory listing
-/// in as an import.
+/// The renderers the image itself reaches, if any. Neighbour-only findings are
+/// dropped here, so a hand-built [`Observed`] cannot pass one off as an import.
 fn links_renderer(own: &Verdict) -> Option<Reason> {
     let mut apis = Vec::new();
     let mut strongest = None;
     for finding in &own.renderers {
         let source = finding.strength();
-        // A finding whose strongest support is a followed link belongs to
-        // `links_renderer_through`, which can name the library it went through.
-        // A finding supported only by a neighbouring file is not evidence the
-        // image loads anything at all.
+        // Linked findings belong to `links_renderer_through`; neighbour-only
+        // ones are not evidence the image loads anything.
         if source == Source::Neighbour || source == Source::Linked {
             continue;
         }
@@ -787,16 +541,8 @@ fn links_renderer(own: &Verdict) -> Option<Reason> {
     strongest.map(|source| Reason::LinksRenderer { apis, source })
 }
 
-/// The renderers reached one link away, merged into a single reason.
-///
-/// Read out of the same [`Verdict`] [`links_renderer`] reads, so the score and
-/// the verdict printed beside it cannot disagree about one binary. They did:
-/// a Unity stub scored for reaching a renderer through `UnityPlayer.dll` while
-/// the verdict under that score said no graphics API was determined.
-///
-/// Merged rather than one reason per library: three local libraries that each
-/// reach Direct3D 11 are one capability observed three times, and scoring each
-/// of them would let a directory full of engine DLLs outrank a game.
+/// The renderers reached one link away, merged into one reason: several local
+/// libraries reaching Direct3D 11 are one capability.
 fn links_renderer_through(own: &Verdict) -> Option<Reason> {
     let mut libraries = Vec::new();
     let mut apis: Vec<String> = Vec::new();
@@ -819,10 +565,8 @@ fn links_renderer_through(own: &Verdict) -> Option<Reason> {
     Some(Reason::LinksRendererThrough { libraries, apis })
 }
 
-/// Unity names the player's data directory after the executable, so
-/// `MyGame.exe` is shipped with `MyGame_Data`. Matched case-insensitively,
-/// because the pairing survives a copy onto a case-preserving filesystem and a
-/// case-sensitive match would lose it.
+/// Unity names the data directory after the executable: `MyGame.exe` ships
+/// with `MyGame_Data`. Matched case-insensitively.
 fn unity_data_directory(stem: &str, siblings: &[String]) -> Option<String> {
     if stem.is_empty() {
         return None;
@@ -836,39 +580,10 @@ fn unity_data_directory(stem: &str, siblings: &[String]) -> Option<String> {
 
 /// The last two directory names, when they are Unreal's packaging shape.
 ///
-/// `Engine/Binaries/Win64` is excluded: it holds the engine's own tools, the
-/// crash reporter among them, and they are not the game. The exclusion is
-/// structural rather than a name list — a packaged Unreal title keeps the
-/// game's `Binaries` under a project directory that is a *sibling* of `Engine`,
-/// never a child of it — but it is the one place in this module where a
-/// directory name is trusted, and it is worth knowing that.
-///
-/// # The cost, which is real and is accepted
-///
-/// A game whose own directory is called `Engine` loses this reason and scores
-/// 55 lower than it should. It does not lose its *place*: the exclusion has
-/// never been load-bearing for a top-ranked result, because the tools it keeps
-/// out have no renderer import, no shipping suffix and no name match, and the
-/// shipping binary beside them wins on those instead. What is lost is a line of
-/// explanation.
-///
-/// The obvious repair is to ask the tree instead of the name — in a packaged
-/// title *both* `Engine/Binaries` and `<Game>/Binaries` exist, so an `Engine`
-/// that is the only directory hosting a `Binaries` folder is more likely a game
-/// than an engine. It is not done, for two reasons that are worse than the
-/// defect:
-///
-/// A title that is **half downloaded**, with only `Engine/` extracted so far,
-/// has exactly that shape, and the repair would hand Epic's crash reporter the
-/// game's own layout bonus in a state that occurs on real machines every day.
-///
-/// And the answer would depend on **how much of the tree was read**. The walk
-/// is bounded; a truncation before reaching `<Game>/Binaries` would silently
-/// change the reasons printed for an unrelated candidate in a different
-/// directory. A signal whose value moves with the budget is not a signal.
-///
-/// So the narrower rule stays, and the limitation is documented here and in the
-/// README rather than traded for a wrong answer in a commoner case.
+/// `Engine/Binaries/Win64` is excluded: it holds the engine's tools. A game
+/// whose own directory is called `Engine` loses this reason, which is accepted:
+/// inferring it from the rest of the tree would depend on how much of the tree
+/// was read, and would misfire on a half-downloaded install.
 fn unreal_binaries_directory(relative: &Path) -> Option<String> {
     let names: Vec<String> = relative
         .parent()?
@@ -907,12 +622,8 @@ fn has_shipping_suffix(stem: &str) -> bool {
 
 const SHIPPING: &str = "-Shipping";
 
-/// The better of the two name matches, or none.
-///
-/// The supplied name wins a tie because it is evidence from somewhere else. The
-/// directory's own name is the same install talking about itself, which is
-/// still worth something — it is how a non-Steam install gets any name evidence
-/// at all — but it is not independent.
+/// The better of the two name matches, or none. The supplied name wins a tie,
+/// being evidence from outside the install.
 fn name_resemblance(stem: &str, supplied: Option<&str>, directory: Option<&str>) -> Option<Reason> {
     let candidates = [
         (supplied, NameFrom::Supplied),
@@ -941,24 +652,9 @@ const MIN_NAME_OVERLAP: usize = 3;
 
 /// How closely a file stem and a title match, once punctuation is dropped.
 ///
-/// `Cyberpunk 2077` and `Cyberpunk2077.exe` are the same name written twice, so
-/// they match exactly. `Game-Win64-Shipping.exe` in a game called `Game` is a
-/// partial match, because the stem *begins* with the title.
-///
-/// **Only at the beginning.** A substring found anywhere would match `java.exe`
-/// against a folder called `Java Development Kit`, and `edit.exe` against
-/// `Skyrim Special Edition`, which is not a coincidence that happens rarely —
-/// it happened twice in the first dozen fixtures written against this function.
-/// A name that lifts an unrelated installer off a score of zero is worse than a
-/// name signal that misses, because the miss costs a real game nothing: every
-/// other reason still fires and this one was never allowed to decide anything.
-///
-/// The known miss is a leading article. `The Witcher 3: Wild Hunt` and
-/// `witcher3.exe` are the same game and this reports nothing about them, for
-/// the same reason it reports nothing about `TslGame.exe` in
-/// `PUBG: BATTLEGROUNDS`: there is no rule short of a synonym table that gets
-/// those right, and inventing one here would be the guess-list this module
-/// refuses.
+/// Only at the beginning: a substring anywhere would match `java.exe` against
+/// `Java Development Kit`. A leading article (`The Witcher 3` and
+/// `witcher3.exe`) is a known miss.
 fn resembles(stem: &str, name: &str) -> Option<Resemblance> {
     let stem = squash(stem);
     let name = squash(name);
@@ -974,9 +670,7 @@ fn resembles(stem: &str, name: &str) -> Option<Resemblance> {
     None
 }
 
-/// Lowercase, letters and digits only. Everything a person puts between the
-/// words of a title — spaces, colons, hyphens, trademark signs — is noise when
-/// the question is whether two spellings are the same name.
+/// Lowercase letters and digits only.
 fn squash(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric())
@@ -984,12 +678,8 @@ fn squash(text: &str) -> String {
         .collect()
 }
 
-/// The graphics libraries the executable's own directory ships.
-///
-/// Drawn from the renderer and feature findings whose support is a neighbouring
-/// file. Local overrides are deliberately left out: a `dxgi.dll` next to a game
-/// is a mod loader, and which executable it was installed for is exactly what it
-/// does not say.
+/// The graphics libraries the executable's own directory ships. Local
+/// overrides are left out: a `dxgi.dll` does not say which executable it serves.
 fn ships_graphics_libraries(directory: &Verdict) -> Option<Reason> {
     let mut libraries: Vec<String> = directory
         .renderers

@@ -1,12 +1,6 @@
-//! Inventory rendering for `installed` and `steam`.
-//!
-//! A single [`dxray_core::walk`] produces both human-readable text and JSONL,
-//! keeping the two surfaces consistent. Launcher discovery, executable ranking
-//! and static analysis remain in `dxray-core`; this module only presents them.
-//!
-//! Every launcher-declared installation is retained. Entries without static
-//! game evidence are grouped after entries with evidence rather than filtered:
-//! Steam metadata cannot reliably distinguish games from tools or runtimes.
+//! Inventory rendering for `installed` and `steam`: one [`dxray_core::walk`]
+//! produces both the text and the JSONL. Installs without game evidence are
+//! grouped last, never filtered.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -18,10 +12,8 @@ use dxray_core::{Catalogue, Game, Launcher, Origin};
 
 use crate::record::{Record, display_path, push_optional, push_quoted, push_string};
 
-/// Rendered inventory and scan status.
-///
-/// Failures are collected so one unreadable library does not hide the rest of
-/// the inventory; they still make the scan incomplete.
+/// Rendered inventory and scan status. A failure is collected rather than
+/// hiding the rest, and still makes the scan incomplete.
 pub struct Listing {
     /// Human-readable inventory.
     pub text: String,
@@ -36,15 +28,8 @@ pub struct Listing {
     pub roots: usize,
     pub libraries: usize,
     pub games: usize,
-    /// Whether each game says which launcher it came from.
-    ///
-    /// True exactly when the scan was asked about more than one launcher, which
-    /// is a fact about the question and not about the machine: `installed` names
-    /// origins on a machine with only Heroic on it, because the flag could have
-    /// found Steam and the reader has no way to know it did not. `steam`
-    /// never names them, because the flag already did — a column with the same
-    /// value in every row is noise, and it would change the bytes of an output
-    /// people already have captured.
+    /// Whether each game names its launcher: true when the scan asked about
+    /// more than one launcher, whatever the machine has.
     pub name_origins: bool,
 }
 
@@ -92,43 +77,9 @@ impl Listing {
         }
     }
 
-    /// The one-line summary under the listing.
-    ///
-    /// Says so when the count is incomplete. A bare "41 games" under a block
-    /// that also reported two unreadable manifests is the line a person
-    /// remembers and quotes, and on its own it is not true — the two failures
-    /// are games as well, just ones this tool could not read. The count and the
-    /// caveat have to travel together or the caveat is the part that gets lost.
-    ///
-    /// # It means the same thing for every launcher
-    ///
-    /// "In M libraries across K installs" counts what it always counted: the
-    /// places games would be if the user had any. A Heroic installation is one
-    /// install with one library — its configuration root, which is the
-    /// directory its records were read out of — so a Heroic-only machine with
-    /// three games reads `3 games in 1 library across 1 install`, and an
-    /// installed Heroic with nothing in it reads `0 games in 1 library across
-    /// 1 install` rather than disappearing. That is the same sentence an empty
-    /// Steam library has always earned.
-    ///
-    /// # This line, the JSON summary and the exit code say the same thing
-    ///
-    /// Every caveat in [`Listing::caveats`] that means *something was not read*
-    /// also moves the exit code — see [`Listing::incomplete_scan`]. A human
-    /// reading this sentence and a script reading the status must not come away
-    /// with different stories about one run.
-    ///
-    /// The `--json` summary carries this whole sentence as its `says` field and
-    /// the list it is built from as its `caveats` field, both from
-    /// [`Listing::caveats`]. There is one place where a scan decides it has
-    /// something to hedge about, and all three surfaces read it.
-    ///
-    /// The caveats that do not move it are the notes, and that is not an
-    /// exception to the rule but an instance of it: everything was read, and an
-    /// old single-library install genuinely looks like that. They say "there
-    /// may be more" and "nothing is missing because of it", never "some of this
-    /// is missing" — and they say one or the other according to their
-    /// [`Cause`], because the two are not the same doubt.
+    /// The one-line summary under the listing, with every caveat beside the
+    /// counts. The JSON summary carries the same sentence, and the caveats that
+    /// mean something was not read also move the exit code.
     pub fn trailer(&self) -> String {
         let summary = format!(
             "{} {} in {} {} across {} {}",
@@ -146,28 +97,12 @@ impl Listing {
         format!("{summary}; {}", caveats.join("; "))
     }
 
-    /// Everything the trailer hedges the counts with, one sentence each.
-    ///
-    /// Separated from [`Listing::trailer`] so that the JSON summary can carry
-    /// these sentences rather than word the same four conditions a second
-    /// time. A caveat added here is printed to a person and handed to a program
-    /// by the same edit; a caveat this list forgets is absent from both, which
-    /// is a bug that shows up on every surface at once instead of on the one
-    /// nobody was looking at.
-    ///
-    /// One clause per cause, counted separately, and that is the whole reason
-    /// [`Cause`] exists. A clause has to describe the doubt it is actually
-    /// about: a run whose only caveat was a stale launcher record used to read
-    /// "1 index declared no libraries, so there may be more", which sends a
-    /// reader to a file that was fine and reports doubt over libraries that
-    /// were all read. Two causes, two sentences, two counts.
+    /// Everything the trailer hedges the counts with, one sentence per
+    /// [`Cause`]. Shared with the JSON summary so both carry the same words.
     fn caveats(&self) -> Vec<String> {
         let mut caveats = Vec::new();
         if !self.problems.is_empty() {
-            // "files", not "manifests": a problem can also be an unreadable
-            // library index or a directory that could not be listed, and the
-            // trailer naming the wrong kind of file sends a reader looking in
-            // the wrong place. The lines above it name each one exactly.
+            // "files", not "manifests": a problem can also be an index or a directory.
             caveats.push(format!(
                 "{} could not be read, so the count is incomplete",
                 match self.problems.len() {
@@ -176,10 +111,7 @@ impl Listing {
                 }
             ));
         }
-        // An index that declared nothing means the library count itself may be
-        // short, which the games count inherits. Same argument as above: the
-        // number is the part that gets quoted, so the doubt has to ride in the
-        // same line as the number.
+        // An index that declared nothing means the library count may be short.
         match self.notes_about(Cause::Index) {
             0 => {}
             1 => caveats.push("1 index declared no libraries, so there may be more".to_owned()),
@@ -187,11 +119,7 @@ impl Listing {
                 "{n} indexes declared no libraries, so there may be more"
             )),
         }
-        // A record that could not be used is the opposite size of doubt, and
-        // saying so is the point of printing it at all. Nothing is hidden —
-        // that is what put it on the notes list rather than the problems list —
-        // so the clause says the count is sound and leaves the reader with the
-        // row above, which names the record and says why it cost nothing.
+        // A record that cost nothing: the count is sound, and the row above says why.
         match self.notes_about(Cause::Record) {
             0 => {}
             1 => caveats.push(
@@ -202,11 +130,8 @@ impl Listing {
                 "{n} launcher records could not be used, and nothing is missing because of them"
             )),
         }
-        // A bounded walk that ran out of budget did not look at every executable
-        // in that game's directory, so the one named above it may not be the
-        // best one there. Nothing failed to read, which is why this is not
-        // phrased as a failure — but something was not read, which is why it
-        // moves the exit code exactly as a failure does.
+        // A truncated walk may have missed a better executable: not a failure,
+        // but it moves the exit code like one.
         if !self.incomplete.is_empty() {
             caveats.push(format!(
                 "{} searched in full, so the executable named for {} may not be the right one",
@@ -225,105 +150,27 @@ impl Listing {
     }
 
     /// How many notes were raised by `cause`.
-    ///
-    /// The counting is here rather than at the two call sites so that the one
-    /// list stays the one list: a second `Vec` per cause would count itself,
-    /// and the day a third cause appeared, whoever added it would have to
-    /// remember every place that iterates notes rather than adding a variant
-    /// the compiler then asks about.
     fn notes_about(&self, cause: Cause) -> usize {
         self.notes.iter().filter(|note| **note == cause).count()
     }
 
     /// The whole listing as JSONL: one object per line, the summary last.
     ///
-    /// # The shape, and what it is not
-    ///
-    /// It is deliberately **not** the record line `--json` emits for a PE
-    /// file. That line is a frozen positional contract about one file on disk,
-    /// with no field that could hold a game, and widening it to carry an
-    /// install would break every harness already reading it. This is a second
-    /// shape, behind a different question, and it says so in its own first
-    /// key: every object here starts with `"kind"`, and no object a PE scan
-    /// emits has that key at all. A reader can tell the two apart from the
-    /// first eight characters of a line, which is the property that makes two
-    /// shapes under one flag safe rather than reckless.
-    ///
-    /// # One object per row, not one per game
-    ///
-    /// The listing is a tree — install, library, games — and one object per
-    /// game would flatten it. Flattening loses the installs and libraries that
-    /// hold no games, and those are exactly the rows worth reading: an
-    /// installed launcher with nothing in it, or a library whose index could
-    /// not be read. So every row the human listing prints gets one object
-    /// here, of kind `install`, `library`, `game`, `note` or `problem`, and
-    /// each of them names the install and the library it sits under. A
-    /// consumer that wants the tree groups by those two fields; a consumer
-    /// that wants a flat list of games filters on `"kind":"game"` and has lost
-    /// nothing, because the game rows carry their place with them.
-    ///
-    /// The one text row with no object of its own is `(no games installed)`,
-    /// which is not a fact — it is the absence of game rows under a library
-    /// row, and a reader that groups by library sees exactly that.
-    ///
-    /// # What is promised
-    ///
-    /// One object per line, no header and no trailer text. Every object has
-    /// `kind` as its first key. A scan that ran ends with exactly one
-    /// `summary` object, whose `complete` field is the exit status of the run
-    /// and whose `notes` object counts the notes raised, one key per
-    /// [`Cause`]. Every `note` object carries that same key as `cause`, and
-    /// the spelling of a cause is stable. Keys may be **added** to any object
-    /// and new kinds may appear, so a consumer must read by name and ignore
-    /// what it does not know.
-    ///
-    /// What is **not** promised: the order of keys within an object — unlike
-    /// the PE record line, nothing here may be read positionally — and the
-    /// wording of any `says` field, which is prose written for a person and
-    /// free to be reworded. Programs read `kind`, `cause`, `complete`, the
-    /// counts and the paths; `says` and `rows` are for showing to a human.
+    /// Every object starts with `kind`: `install`, `library`, `game`, `note`,
+    /// `problem` or `summary`, which the per-file record line never has. A scan
+    /// that ran ends with one `summary`, whose `complete` is the exit status.
+    /// Keys may be added and kinds may appear; key order and the wording of
+    /// `says` and `rows` are not promised.
     pub fn json(&self) -> String {
-        // Cloned once per run rather than borrowed, because the summary must
-        // not be separable from the rows it counts: a caller that could ask
-        // for the body alone would be able to report games while dropping the
-        // sentence that says the scan was partial.
+        // The summary is never separable from the rows it counts.
         let mut out = self.json.clone();
         self.push_summary(&mut out);
         out
     }
 
-    /// The last line: the counts, the caveats, and whether anything went
-    /// unread.
-    ///
-    /// `says` is [`Listing::trailer`] verbatim — the same sentence printed
-    /// under the human listing — and `caveats` is the list that sentence is
-    /// built from. A program therefore reads the caveats without parsing the
-    /// prose, and a person quoting the JSON and a person quoting the terminal
-    /// quote the same words.
-    ///
-    /// `complete` is `!`[`Listing::incomplete_scan`], which is also the exit
-    /// code. Not a fourth wording of "did everything get read": the status, the
-    /// trailer and this field are one predicate, so a consumer that never looks
-    /// at the exit status still cannot be told a partial scan was a whole one.
-    ///
-    /// Note that `complete` can be true while `caveats` is not empty. That is a
-    /// note — either [`Cause`] of one — and it is deliberate: everything was
-    /// read, and there may be less of it than the user expects.
-    ///
-    /// `notes` is how many notes of each [`Cause`] the scan raised, keyed by
-    /// [`Cause::key`], every cause present and zero written as `0`. It is the
-    /// same count [`Listing::caveats`] words a clause from, and it exists
-    /// because that clause is prose: the README promises the sentences may be
-    /// reworded, so a program that needed the number had to parse a sentence
-    /// it was told not to rely on. The clause is still the sentence for a
-    /// person, and this is the number for a program; they are one count read
-    /// through [`Listing::notes_about`], not two vocabularies for it, and a
-    /// count that moved in one and not the other would fail the golden.
-    ///
-    /// `caveats` itself stays a list of sentences and gains no key of its own.
-    /// Every clause a program could want to branch on is already data beside
-    /// it — `complete`, the counts, and now `notes` — and a clause tagged with
-    /// the cause it words would be the row saying its cause a second time.
+    /// The last line: the counts, whether anything went unread (`complete`, the
+    /// exit status), the notes per [`Cause`], and the caveats with the trailer's
+    /// own sentence.
     fn push_summary(&self, out: &mut String) {
         out.push_str("{\"kind\":\"summary\",");
         let _ = write!(
@@ -354,14 +201,8 @@ impl Listing {
         out.push_str("}\n");
     }
 
-    /// True when the trailer admits something was not read.
-    ///
-    /// The exit code is drawn from exactly this, so that the sentence a person
-    /// reads and the status a script reads cannot disagree — and so is the
-    /// `complete` field of the JSON summary, so that a consumer who never looks
-    /// at the status reads the same answer. [`Listing::notes`] is deliberately
-    /// absent, whatever its [`Cause`]: everything was read and there may simply
-    /// be less of it than expected, which is a caveat and not a failed scan.
+    /// True when the trailer admits something was not read. The exit code and
+    /// the JSON `complete` are drawn from this; notes do not count.
     pub fn incomplete_scan(&self) -> bool {
         !self.problems.is_empty() || !self.incomplete.is_empty()
     }
@@ -371,16 +212,8 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
     if n == 1 { one } else { many }
 }
 
-/// Walks every installation of every launcher in `launchers` and renders what
-/// is in it.
-///
-/// The traversal itself is [`dxray_core::walk`], shared with the terminal
-/// browser. What is here is the presentation: the row layout, the order the
-/// games and the unreadable records appear in, and the counters the trailer is
-/// written from.
-///
-/// Both presentations, in one pass. The returned [`Listing`] holds the text
-/// and the JSON of the same walk, whichever the caller ends up printing.
+/// Walks every installation of every launcher in `launchers` and renders both
+/// presentations in one pass.
 #[cfg(test)]
 pub fn scan(launchers: &[&dyn Launcher]) -> Listing {
     scan_with_view(launchers, crate::report::Presentation::Standard)
@@ -392,17 +225,12 @@ pub fn scan_with_view(
 ) -> Listing {
     let mut render = Render {
         listing: Listing::new(launchers.len() > 1),
-        // One reading per Proton build rather than one per game. A library
-        // where a hundred games share one Proton would otherwise tokenise the
-        // same two thousand lines a hundred times.
+        // One reading per Proton build and per Steam root, not per game.
         builds: Builds::default(),
         install: None,
         presentation,
     };
-    // Discarded, not ignored: this visitor never breaks, because it has nothing
-    // to cancel and no channel that can go away. That is the whole of what a
-    // caller with no cancellation has to write — there is no flag to pass and
-    // no `Option` to unwrap, which is why the traversal takes neither.
+    // This visitor never breaks, so the walk always completes.
     let _ = dxray_core::walk(launchers, &mut render);
     if presentation == crate::report::Presentation::Compact {
         render.listing.text.push_str("Static evidence only; runtime use and compatibility are not established. Unknown renderers may load dynamically.\n");
@@ -415,56 +243,25 @@ struct Render {
     presentation: crate::report::Presentation,
     listing: Listing,
     builds: Builds,
-    /// The installation the walk is currently inside, so every row below it can
-    /// name where it came from.
-    ///
-    /// Remembered rather than passed, because [`dxray_core::walk`] announces a
-    /// root before anything in it and never returns to one. `None` before the
-    /// first root — a state no traversal produces today — is written as a JSON
-    /// `null` rather than filled in with the library's own path, because a row
-    /// that named the wrong install would be a wrong answer wearing a right
-    /// one's clothes.
+    /// The installation the walk is inside. `None` before the first root is
+    /// written as `null`, never guessed.
     install: Option<PathBuf>,
 }
 
-/// What a worded row means for the exit code, and what a program should call
-/// it.
-///
-/// [`Listing`] already draws this line with two lists, because it is the whole
-/// difference between a caveat and a failed scan. Naming it at the one call
-/// site that fills them is what stops the row a person reads, the object a
-/// program reads and the list the status is drawn from being given three
-/// different answers about one sentence.
+/// What a worded row means for the exit code, and what a program calls it.
 #[derive(Clone, Copy)]
 enum Kind {
-    /// Everything was read, and there may be less of it than expected. The
-    /// [`Cause`] rides along because the caller is the only one who knows it:
-    /// by the time the trailer counts a note, the sentence is worded and the
-    /// part of the walk that raised it is gone.
+    /// Everything was read, and there may be less of it than expected.
     Note(Cause),
     /// Something could not be read.
     Problem,
 }
 
 impl Render {
-    /// Files one worded item: the row a person reads, the object a program
-    /// reads, and the list the exit code is drawn from.
-    ///
-    /// One call, three destinations, on purpose. A problem that reached the
-    /// listing without reaching the JSON would be a scan telling a script it
-    /// was clean while telling a person it was not, and the only way to make
-    /// that unwritable is to leave no way of doing one without the others.
-    ///
-    /// `label` is the word the human row is filed under — `note`, `error` or
-    /// `unreadable` — and travels into the JSON beside the kind, because it
-    /// says something the kind does not: an `error` is the launcher's index and
-    /// an `unreadable` is one record inside a library, and both are problems.
-    ///
-    /// A note also carries its [`Cause`] as a `cause` key, because for a note
-    /// the label carries nothing: both causes are filed under `note`, which is
-    /// the right word for a person and no word at all for a program. Written
-    /// from [`Cause::key`], the same call the summary counts under, so the row
-    /// and the count cannot name one note two ways.
+    /// Files one worded item in all three places at once: the text row, the
+    /// JSON object, and the list the exit code is drawn from. `label` is the
+    /// row's word (`note`, `error`, `unreadable`); a note also carries its
+    /// [`Cause`].
     fn record(
         &mut self,
         label: &'static str,
@@ -512,15 +309,8 @@ impl dxray_core::Visitor for Render {
         ControlFlow::Continue(())
     }
 
-    /// Printed before the libraries it qualifies, because it explains why there
-    /// is only one of them. On stdout, not only on stderr: a caveat that lives
-    /// on the other stream is the half that gets lost when the output is pasted
-    /// somewhere.
-    ///
-    /// [`Cause::Index`], and this callback is the only place that can say so:
-    /// [`dxray_core::walk`] raises it from the launcher's index, before a
-    /// library has been opened, and that is exactly what the trailer's "there
-    /// may be more" is about.
+    /// A launcher index note, printed above the libraries it qualifies and on
+    /// stdout so it survives a paste. Always [`Cause::Index`].
     fn note(&mut self, origin: Origin, note: &str) -> ControlFlow<()> {
         self.record(
             "note",
@@ -532,13 +322,8 @@ impl dxray_core::Visitor for Render {
         ControlFlow::Continue(())
     }
 
-    /// A root whose index could not be read is still a launcher installation;
-    /// what failed is the file that says where its other libraries are.
-    ///
-    /// Written into the listing as well as collected, for the same reason the
-    /// notes are: a root that prints its own path and then nothing underneath
-    /// reads as an install with no games, and the line saying why must not be
-    /// on the stream that gets dropped when the output is pasted somewhere.
+    /// A root whose index could not be read. Printed in the listing too, so the
+    /// install does not read as one with no games.
     fn problem(&mut self, origin: Origin, problem: &str) -> ControlFlow<()> {
         // No library: the walk reports a root's own failures before it has
         // opened one, and the index that failed is what says where they are.
@@ -581,9 +366,7 @@ impl dxray_core::Visitor for Render {
                 "installations"
             }
         );
-        // A library that produced nothing but failures is not an empty library,
-        // and "(no games installed)" would be a claim about a directory nobody
-        // managed to look inside. The rows below say what happened instead.
+        // Only failures is not an empty library: the rows below say what happened.
         let unreadable = catalogue.games.is_empty() && !catalogue.problems.is_empty();
         if !unreadable {
             render_games(
@@ -602,16 +385,8 @@ impl dxray_core::Visitor for Render {
                 self.presentation,
             );
         }
-        // Records that could not be used but cost nothing: printed with the
-        // reason they cost nothing, and counted as notes so the exit code stays
-        // out of it. A Heroic cache entry that lost its install path for a game
-        // another cache still supplies is the case this exists for.
-        //
-        // `Cause::Record`, because this is one entry inside a library that was
-        // read in full — the same line the `error`/`unreadable` labels draw
-        // between a launcher's index and a record inside it, drawn one list
-        // over. It is the trailer's "nothing is missing because of it", and
-        // wording it as an index note named a file nobody had touched.
+        // Records that could not be used and cost nothing: notes, with the
+        // reason. `Cause::Record`, since the library itself was read in full.
         for note in catalogue.notes {
             self.record(
                 "note",
@@ -621,10 +396,7 @@ impl dxray_core::Visitor for Render {
                 note,
             );
         }
-        // The games are shown first and the unreadable records named after
-        // them. A manifest this tool cannot read is still a game the user owns,
-        // so the count of what was found is not the whole story and the listing
-        // must not let it look like it is.
+        // Unreadable records after the games: each is still a game the user owns.
         for problem in catalogue.problems {
             self.record(
                 "unreadable",
@@ -638,106 +410,25 @@ impl dxray_core::Visitor for Render {
     }
 }
 
-/// One labelled row, wrapped at [`crate::wrap::WIDTH`] with continuations lined
-/// up under the value rather than under the label.
-///
-/// Wrapped because a note is a sentence, not a path: three lines of prose
-/// running off the right edge of a terminal is a caveat nobody finishes
-/// reading, which defeats the point of printing it. A single word longer than
-/// the remaining space — which is what a long path is — goes on its own line
-/// and overflows instead of being split, because half a path is not findable.
+/// One labelled row, wrapped at [`crate::wrap::WIDTH`] with continuations under
+/// the value. A word longer than the line, such as a path, is not split.
 fn row(out: &mut String, label: &str, value: &str) {
     let _ = write!(out, "  {label:<LABEL$}");
     crate::wrap::prose(out, INDENT, INDENT, value);
 }
 
-/// One line per game, with the install directory under it and the executable
-/// this tool would analyse under that.
+/// One entry per game: the install, the best executable and its strongest
+/// reason, every caveat the survey raised, and the Proton/NVAPI rows.
 ///
-/// Several lines rather than one because these paths are long and the title is
-/// what a person scans for. Putting them on one line pushes every title out of
-/// alignment as soon as one library lives on a deeper mount than the others.
+/// Installs that were read and carry no evidence of being a game are printed
+/// after the others, never hidden, in the launcher's order; the question is
+/// [`Best::lacks_evidence`](crate::game::Best::lacks_evidence), shared with the
+/// terminal browser. Each game is inspected and rendered as it comes; only the
+/// rendered rows of demoted games wait until the library ends.
 ///
-/// The best candidate only, with its strongest reason — not the whole ranking.
-/// A library holds a hundred games and a full ranking for each would bury the
-/// listing; `dxray game <path>` prints the rest, and the line here says the
-/// score so a reader can see which answers are thin ones.
-///
-/// Every caveat the survey raised *is* printed, including the ones that say the
-/// walk stopped early. Those are exactly the ones a short listing would most
-/// like to drop, and dropping them is how a truncated answer starts looking
-/// like a complete one.
-///
-/// # The order, and why there is no extra marker on it
-///
-/// Two groups, never fewer rows. The installs that were read and carry no
-/// evidence of being a game are printed under the ones that do, rather than
-/// hidden: on a measured library that is roughly four rows in nine — Proton
-/// builds and Steam runtimes — and an honest inventory that cannot be read is
-/// not much of an inventory. Erring by showing something extra beats erring by
-/// hiding a game, so this demotes; it never filters, and the trailer counts
-/// every game in both groups.
-///
-/// The question is [`Best::lacks_evidence`](crate::game::Best::lacks_evidence),
-/// which is `dxray-core`'s, so this listing and the terminal browser demote the
-/// same installs. An install that could not be read stays with the games: it
-/// was never asked, and its row says so.
-///
-/// Within each group the launcher's own order is kept. There is no second sort
-/// key, because reordering games against each other would be this listing
-/// claiming a ranking between games that no evidence supports.
-///
-/// Nothing is appended to a demoted game's rows. The browser needs a ` no
-/// evidence` marker because its list column shows a headline — a renderer
-/// verdict — which on a Proton build reads as a confident answer about a game.
-/// The column here is already the sentence: `best` reads "(nothing here carries
-/// evidence of being a game; the highest ranked of N executables is X)", or
-/// "(no executable in this directory)" where there was nothing to rank. Both
-/// say what the marker would say and say more, and a marker repeating the row
-/// it sits above is how a second vocabulary for one fact gets started.
-///
-/// # Partitioning without buffering the library
-///
-/// The order needs each game's answer before that game is printed, not before
-/// the library is. So the inspections still run one game at a time, and the
-/// rendered rows of a demoted game — not its facts — wait in a buffer that is
-/// appended when the library ends. What is held at once is the rendering of
-/// the demoted share of one library, plus the one game being written.
-///
-/// # Both renderings come out of one pass
-///
-/// Every row below is written to the terminal listing and to the JSON in the
-/// same breath, out of the same values, and the rows themselves are decided
-/// once into `rows` and rendered twice. `--json` does not select a renderer;
-/// it selects which of two finished renderings is printed. That is not
-/// economy — it is the only arrangement in which a launcher behaving oddly
-/// cannot produce one story for a person and another for a program, which is
-/// the failure this file has already paid for in other forms.
-///
-/// # The origin row
-///
-/// Printed per game rather than per root, because the root is not where the
-/// answer lives: one Heroic configuration holds Epic, GOG and Amazon games
-/// together, and a label on the directory above them would be wrong for two out
-/// of three. It comes off the game's own [`Origin`], so a launcher added to the
-/// registry names itself here and no branch in this file has to learn it.
-///
-/// # The NVAPI rows, and why they cost no exit code
-///
-/// Each game also gets what Proton will do to its NVAPI, read out of the
-/// launcher script of the build its prefix says it last ran under. A row is
-/// printed for every game including the ones with no answer, because a game
-/// with nothing said about it reads as a game with nothing wrong with it. A
-/// game from a launcher with no Steam application id is told in words that the
-/// question does not apply to it, which is a different statement from silence.
-///
-/// None of it moves the exit code, and that is not an oversight. The status
-/// this listing returns answers one question — was every game the launcher
-/// declared actually read — and an NVAPI answer is not part of that count. Most
-/// of a real library has never been launched under Proton and so has no prefix
-/// and no build to read, which is the ordinary state of a healthy machine
-/// rather than a scan that came up short. `dxray nvapi <build>` is the mode
-/// where failing to read a policy *is* the failure, and it exits 1 for it.
+/// The text and the JSON are written in the same pass, from the same rows.
+/// NVAPI answers never move the exit code: most games have never run under
+/// Proton, which is not a failed scan.
 fn render_games(
     sink: &mut Sink<'_>,
     games: &[Game],
@@ -747,21 +438,11 @@ fn render_games(
     presentation: crate::report::Presentation,
 ) {
     if games.is_empty() {
-        // No JSON counterpart, and none is missing: this line is the *absence*
-        // of game rows under a library, and a consumer grouping games by
-        // library reads exactly that from the library row with nothing under
-        // it. A row asserting emptiness would be the only object here that
-        // states a fact nothing observed.
+        // No JSON object: this is the absence of game rows, not a fact.
         let _ = writeln!(sink.text, "    (no games installed)");
         return;
     }
-    // The second group, held back until the first is finished. Rendered rows,
-    // not facts: each game is still inspected and rendered one at a time, in
-    // the order the launcher declared it, and only the finished rows of a
-    // demoted game wait here. A library holds tens of games and this holds the
-    // rows of the ones that argue nothing — a few kilobytes — where
-    // partitioning the games first would have made every inspection in the
-    // library happen before the first line was printed.
+    // Demoted games' rendered rows, appended when the library ends.
     let mut ordinary = Vec::new();
     let mut demoted = Vec::new();
     for game in games {
@@ -779,20 +460,13 @@ fn render_games(
         let best = crate::game::best_rows(&game.install_dir, survey);
         let lacks_evidence = best.lacks_evidence();
 
-        // The rows this game gets, decided once and rendered twice. The origin
-        // row is the listing's own — see above — and the two Proton rows come
-        // from the inspection; everything between them is `best_rows`, so a row
-        // added there appears on both surfaces without either learning its
-        // name.
+        // The rows this game gets, decided once and rendered twice.
         let mut rows = Vec::new();
         if name_origins {
             rows.push(("origin", game.origin.label().to_owned()));
         }
         rows.extend(best.rows);
-        // The build is named beside the verdict, never instead of it. Which
-        // Proton ran a game decides the answer — the policy changed direction
-        // twice across releases — so a verdict with no build behind it is not
-        // checkable by the person reading it.
+        // The build is named beside the verdict, so the verdict is checkable.
         if let Some(script) = &nvapi.script {
             rows.push(("proton", display_path(script)));
         }
@@ -811,16 +485,10 @@ fn render_games(
             best.carries_evidence,
         );
 
-        // Collected in the order the launcher declared its games rather than
-        // the order this prints them. The rows say it to a person and the
-        // game's own `incomplete` array says it to a program; this is what says
-        // it to the exit code, and a game moved to the bottom of the listing
-        // must not be able to lose its caveat on the way down.
+        // In declared order, so a demoted game cannot lose its caveat.
         sink.incomplete.extend(best.incomplete);
 
-        // Both renderings of one game move together, into the same group. The
-        // pair is what stops a demoted game from being demoted on one surface
-        // and not on the other.
+        // Both renderings move into the same group together.
         if lacks_evidence {
             demoted.push(one);
         } else {
@@ -850,9 +518,7 @@ fn render_games(
 }
 
 /// Places a rendered game under its final sibling position once the library's
-/// complete grouping is known. Analysis happens one game at a time; only the
-/// small rendered records wait long enough for the tree to draw a truthful
-/// final branch.
+/// grouping is known.
 fn tree_branch(entry: &str, prefix: &str, last: bool) -> String {
     let marker = if last { "└" } else { "├" };
     let continuation = if last { "   " } else { "│  " };
@@ -1095,9 +761,6 @@ fn tree_block(out: &mut String, block: &str) {
 }
 
 /// The two renderings of one library's games, and the caveat list they share.
-///
-/// One struct rather than three arguments, so that a caller cannot hand over
-/// somewhere to print and forget somewhere to report.
 struct Sink<'a> {
     text: &'a mut String,
     json: &'a mut String,
@@ -1113,38 +776,17 @@ struct Rendered {
     json: String,
 }
 
-/// Where in the tree a library sits, so that every row under it can say so.
-///
-/// `install` is an `Option` because nothing in this file may invent one: see
-/// [`Render::install`].
+/// Where in the tree a library sits. `install` is never invented.
 #[derive(Clone, Copy)]
 struct Place<'a> {
     install: Option<&'a Path>,
     library: &'a Path,
 }
 
-/// One game as a JSON object: where it is, what its launcher calls it, and
-/// every row printed under it.
-///
-/// `directory` is spelled the way `game --json` spells it, because it is the
-/// same thing and the two modes are meant to be used together: this answers
-/// "what is installed and where", and that path handed to `dxray game <dir>
-/// --json` answers "what is inside it", with the whole ranking, the scores and
-/// the reasons. This shape deliberately does not repeat that ranking — a
-/// hundred-game library would bury it — so `rows` carries what the terminal
-/// listing shows and no more.
-///
-/// `rows` is prose, and labelled. A consumer reading it is reading what a
-/// person would read, which is why the labels are there: `best`, `note`,
-/// `unread`, `origin`, `proton`, `nvapi`. Nothing here should be matched on by
-/// its wording.
-///
-/// `carries_evidence` is three-state and `null` is not `false`. `false` means
-/// the install was read and nothing in it argues it is a game — a Proton build
-/// or a redistributable — and `null` means the directory could not be read and
-/// the question was never put. Collapsing the two would hide a failure under a
-/// finding, which is the distinction
-/// [`dxray_core::inspect::lacks_evidence`] exists to keep.
+/// One game as a JSON object: where it is, what its launcher calls it, and the
+/// labelled prose rows printed under it. `directory` is spelled as `game --json`
+/// spells it. `carries_evidence` is three-state: `null` means the install could
+/// not be read, which is not `false`.
 fn push_game(
     out: &mut String,
     game: &Game,
@@ -1158,9 +800,7 @@ fn push_game(
     push_place(out, place.install, Some(place.library));
 
     push_string(out, "id", &game.identity.to_string());
-    // The one identifier in this project that opens a door, and the reason
-    // `Identity` is an enum: a Heroic game has no Steam application id, so it
-    // gets `null` rather than a zero that is also a real appid.
+    // A Heroic game has no Steam application id: `null`, not a zero.
     match game.identity.steam_appid() {
         Some(appid) => {
             let _ = write!(out, ",\"steam_appid\":{appid},");
@@ -1198,17 +838,8 @@ fn push_game(
     out.push_str("]}\n");
 }
 
-/// The launcher a row came from: the stable key first, the worded label after.
-///
-/// Both, because they answer different questions. `key` is what a program
-/// filters on and never changes; `label` is written for a person, may be
-/// reworded, and is the only one that names a launcher's *backend* — every
-/// Heroic store shares the key `heroic`, so "which shop sold this" appears
-/// here only as `Heroic / GOG` in the label. A consumer that needs the shop as
-/// data is asking for something [`Origin`] does not yet carry, and this says so
-/// rather than pretending the label is a key.
-///
-/// Leaves a trailing comma, like every field writer in this file.
+/// The launcher a row came from: `key` for programs, `label` for people, and
+/// the only one naming a Heroic backend. Leaves a trailing comma.
 fn push_origin(out: &mut String, origin: Origin) {
     push_string(out, "origin", origin.key());
     out.push(',');
@@ -1216,12 +847,8 @@ fn push_origin(out: &mut String, origin: Origin) {
     out.push(',');
 }
 
-/// Where in the tree a row sits: the installation, then the library inside it.
-///
-/// Both may be `null`, and neither is ever guessed. A problem raised against a
-/// launcher's own index has no library — the file that failed is the one that
-/// would have said where the libraries are — and writing the root's path there
-/// would invent a library nobody looked in.
+/// Where in the tree a row sits: the installation, then the library. Either
+/// may be `null`, and neither is guessed.
 fn push_place(out: &mut String, install: Option<&Path>, library: Option<&Path>) {
     push_optional(out, "install", install.map(display_path).as_deref());
     out.push(',');
@@ -1229,16 +856,8 @@ fn push_place(out: &mut String, install: Option<&Path>, library: Option<&Path>) 
     out.push(',');
 }
 
-/// The message for a machine where none of `launchers` was found.
-///
-/// It lists where the search looked. "No Steam installation found" on its own
-/// is unactionable: the install may well be somewhere real that this tool does
-/// not know to check, and only the list of candidates makes that visible.
-///
-/// Asked about one launcher it names that launcher, because the reader asked
-/// about exactly it. Asked about several it groups the candidates under each,
-/// because a flat run of a dozen paths does not tell anybody which of them was
-/// a Heroic that is not there.
+/// The message for a machine where none of `launchers` was found, listing
+/// where the search looked, grouped by launcher when there are several.
 pub fn nothing_found(launchers: &[&dyn Launcher]) -> String {
     let single = match launchers {
         [only] => Some(only.origin().label()),
@@ -1253,10 +872,7 @@ pub fn nothing_found(launchers: &[&dyn Launcher]) -> String {
         if single.is_none() {
             let _ = writeln!(out, "  {}:", launcher.origin().label());
         }
-        // Two launchers can look in the same directory, and printing it under
-        // both headings is the truth. Only repeats within one launcher are
-        // dropped, which is what a candidate list built from overlapping
-        // environment variables produces.
+        // Only repeats within one launcher are dropped.
         let mut seen = HashSet::new();
         for candidate in launcher.candidate_roots() {
             if seen.insert(candidate.clone()) {
@@ -1273,18 +889,8 @@ pub fn nothing_found(launchers: &[&dyn Launcher]) -> String {
     out
 }
 
-/// The same message as [`nothing_found`], as one JSON object.
-///
-/// A `problem` object and not a shape of its own, because that is what it is:
-/// something the run could not do, worded. It names no install and no library
-/// because there was none, and no `summary` follows it — nothing was scanned,
-/// so there is nothing to count, and a summary reading `0 games` with
-/// `complete` set would be the reassuring-looking lie this whole flag exists to
-/// refuse. The exit code is 1, as it is without `--json`.
-///
-/// The sentence is [`nothing_found`]'s own, candidate paths and newlines
-/// included, so the program reading stdout and the person reading stderr are
-/// told the same thing.
+/// [`nothing_found`] as one JSON `problem` object. No `summary` follows:
+/// nothing was scanned.
 pub fn nothing_found_json(launchers: &[&dyn Launcher]) -> String {
     let mut out = String::from("{\"kind\":\"problem\",\"origin\":null,\"origin_label\":null,");
     push_place(&mut out, None, None);
@@ -1295,12 +901,8 @@ pub fn nothing_found_json(launchers: &[&dyn Launcher]) -> String {
     out
 }
 
-/// Steam alone: the set of launchers `steam` asks about.
-///
-/// A constant slice so the caller can hand it to [`scan`] exactly where
-/// `installed` hands it [`launcher::all`](dxray_core::launcher::all). The two
-/// flags differ in this value and nowhere else, which is the entire reason
-/// `steam` did not have to keep its own listing.
+/// Steam alone: the launchers `steam` asks about, where `installed` asks
+/// [`launcher::all`](dxray_core::launcher::all).
 pub const STEAM_ONLY: &[&dyn Launcher] = &[&dxray_core::steam::STEAM];
 
 #[cfg(test)]

@@ -1,14 +1,7 @@
 //! A throwaway directory for tests, and the smallest PE image the parser will
-//! accept. Small enough to keep here rather than take a dependency for, and
-//! shared so that [`evidence`](crate::evidence), [`steam`](crate::steam) and
-//! [`install`](crate::install) do not each grow their own copy.
-//!
-//! The images are assembled rather than copied off the system, because a test
-//! that reads `C:\Windows` passes or fails for reasons that have nothing to do
-//! with this crate.
+//! accept, assembled rather than copied off a system.
 
-// Every size below is a small constant chosen in this file, so the cast lints
-// have nothing real to warn about. `dead_code` because each test module uses a
+// Every size here is a small local constant; each test module uses a
 // different part of this.
 #![allow(dead_code, clippy::cast_possible_truncation)]
 
@@ -67,10 +60,7 @@ impl TempDir {
     }
 
     /// The same, with a `VS_FIXEDFILEINFO` carrying `file` and `product`.
-    ///
-    /// `[0, 0, 0, 0]` is a legitimate argument and produces a resource that is
-    /// present and all zeroes, which is a real state on a real Windows install
-    /// and must not come back looking like a missing one.
+    /// `[0, 0, 0, 0]` gives a resource present and all zeroes, not a missing one.
     pub fn versioned_image(
         &self,
         rel: &str,
@@ -214,9 +204,7 @@ impl Image {
 }
 
 /// A resource table: type -> name -> language, a data entry, then the blob.
-///
-/// Each directory is a 16-byte header plus one 8-byte entry, so the three
-/// levels land at 0, 24 and 48 and the data entry at 72.
+/// The three levels land at 0, 24 and 48 and the data entry at 72.
 fn resource_section(file: [u16; 4], product: [u16; 4]) -> Vec<u8> {
     const LEVEL: usize = 24;
     let data_entry = LEVEL * 3;

@@ -31,9 +31,7 @@ pub fn enter() -> io::Result<Tui> {
         return Err(error);
     }
     if let Err(error) = execute!(stdout, Hide) {
-        // Each setup operation changes terminal-global state.  A failed `Hide`
-        // can follow a successful alternate-screen transition, so rollback must
-        // always attempt every inverse operation rather than only raw mode.
+        // Undo every step: a failed `Hide` can follow a successful switch.
         let _ = restore();
         return Err(error);
     }
@@ -48,11 +46,8 @@ pub fn enter() -> io::Result<Tui> {
     }
 }
 
-/// Installs the process-wide panic hook once.
-///
-/// The previous hook is captured before ours is installed and is called after
-/// restoration. `Once` prevents successive calls to [`crate::run::run`] from
-/// wrapping this hook recursively.
+/// Installs the panic hook once; it restores the terminal, then calls the
+/// previous hook.
 pub fn install_panic_hook() {
     PANIC_HOOK.call_once(|| {
         let previous = panic::take_hook();

@@ -1,20 +1,10 @@
-//! Bounded discovery of container homes on mounted data volumes.
-//!
-//! Distrobox users commonly keep a container home at
-//! `<mount>/data/distrobox/<name>`.  This is not a general filesystem search:
-//! only direct children of those conventional directories on mounted volumes
-//! are considered.  Callers still validate the specific Steam or Heroic path
-//! below each candidate before using it.
+//! Bounded discovery of Distrobox homes at `<mount>/data/distrobox/<name>` on
+//! mounted volumes: direct children only. Callers validate each candidate.
 
 use std::{collections::HashSet, ffi::OsString, fs, path::PathBuf};
 
-/// Environment override for the bounded mounted-container discovery.
-///
-/// When present, this is a platform-native path list of Distrobox homes to
-/// inspect. An empty value deliberately disables the automatic mount scan.
-/// That is useful for callers which have already isolated their normal home
-/// and need discovery to remain confined to that fixture. When absent, normal
-/// runtime discovery reads the mount table as usual.
+/// A path list of Distrobox homes that replaces the mount scan. Empty
+/// disables it, which confines discovery to a test fixture.
 const CONTAINER_HOMES_ENV: &str = "DXRAY_CONTAINER_HOMES";
 
 /// Conventional Distrobox home roots found on mounted external data volumes.
@@ -61,17 +51,9 @@ fn mount_points(text: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Reverses the kernel's `mangle_path()` over one `mountinfo` field.
-///
-/// The kernel escapes exactly four bytes — space, tab, newline and backslash —
-/// as three-digit octal, and passes every other byte through untouched. A mount
-/// point is therefore a byte string, not text: `/media/café` arrives as its two
-/// raw UTF-8 bytes for `é`, and a volume named in a non-UTF-8 encoding arrives
-/// as whatever bytes the filesystem holds. Decoding byte by byte into `char`
-/// would sign-extend each one into its own code point, turning `café` into
-/// `cafÃ©` — a path that silently matches nothing. Bytes are collected instead
-/// and handed back as an [`OsString`], which is what the kernel gave us and
-/// what [`PathBuf`] wants.
+/// Reverses the kernel's `mangle_path()` over one `mountinfo` field: octal
+/// escapes for space, tab, newline and backslash. A mount point is bytes, not
+/// text, so it comes back as an [`OsString`].
 #[cfg(unix)]
 fn unescape_mount_path(path: &str) -> OsString {
     use std::os::unix::ffi::OsStringExt;
@@ -86,9 +68,7 @@ fn unescape_mount_path(path: &str) -> OsString {
             out.push(byte);
             continue;
         }
-        // Only a full three-digit octal escape is one; anything else is a
-        // literal backslash in the name, which the kernel would itself have
-        // escaped, so it is left exactly as it was read rather than guessed at.
+        // Anything but three octal digits is a literal backslash, kept as read.
         if let Some(digits) = bytes.get(at..at + 3)
             && let [a, b, c] = *digits
             && let Some(value) = octal(a, b, c)
@@ -156,10 +136,7 @@ mod tests {
 
     #[test]
     fn non_ascii_mount_names_survive_unescaping_byte_for_byte() {
-        // `mangle_path()` escapes space, tab, newline and backslash and nothing
-        // else, so every byte of a UTF-8 name arrives raw. Decoding one byte at
-        // a time turned `café` into `cafÃ©`: a directory that exists on the
-        // volume and never matches anything this module looks for.
+        // Non-ASCII bytes arrive raw; decoding them one by one gave `cafÃ©`.
         for name in [
             "/media/café",
             "/media/日本語ディスク",
@@ -180,9 +157,7 @@ mod tests {
 
     #[test]
     fn a_backslash_that_is_not_an_octal_escape_is_left_alone() {
-        // `\400` is three digits that are not a byte, and `\8` is not octal at
-        // all. Both are literal text in the name; neither may be dropped, and
-        // the arithmetic behind them must not overflow.
+        // Neither `\400` nor `\8` is an escape; both stay, without overflow.
         assert_eq!(
             unescape_mount_path("/media/a\\400b"),
             std::ffi::OsStr::new("/media/a\\400b")
