@@ -22,7 +22,8 @@ perform.
 Version 0.2.0 supports desktop Linux. Steam and Heroic discovery read local
 installation metadata.
 
-Flatpak, Snap and Steam Deck are not supported in this release.
+Flatpak (Steam, Heroic) and Snap (Steam) locations are searched, but those
+installs and the Steam Deck have not been tested.
 
 ## Install
 
