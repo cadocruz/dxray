@@ -22,9 +22,9 @@ pub struct Listing {
     pub problems: Vec<String>,
     /// Non-fatal caveats, categorized for the summary and JSON output.
     pub notes: Vec<Cause>,
-    /// Directories that reached the scan limit and therefore make the scan
-    /// incomplete.
-    pub incomplete: Vec<String>,
+    /// One entry per game directory not searched in full, holding what was
+    /// not read. Makes the scan incomplete.
+    pub incomplete: Vec<Vec<String>>,
     pub roots: usize,
     pub libraries: usize,
     pub games: usize,
@@ -486,7 +486,9 @@ fn render_games(
         );
 
         // In declared order, so a demoted game cannot lose its caveat.
-        sink.incomplete.extend(best.incomplete);
+        if !best.incomplete.is_empty() {
+            sink.incomplete.push(best.incomplete);
+        }
 
         // Both renderings move into the same group together.
         if lacks_evidence {
@@ -766,7 +768,7 @@ struct Sink<'a> {
     json: &'a mut String,
     /// Game directories that were not searched in full. See
     /// [`Listing::incomplete`].
-    incomplete: &'a mut Vec<String>,
+    incomplete: &'a mut Vec<Vec<String>>,
 }
 
 /// One thing, rendered both ways.

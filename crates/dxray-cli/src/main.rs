@@ -275,7 +275,11 @@ fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> E
     let _ = out.flush();
 
     // Everything that moves the exit code is echoed on stderr too.
-    for problem in found.problems.iter().chain(&found.incomplete) {
+    for problem in found
+        .problems
+        .iter()
+        .chain(found.incomplete.iter().flatten())
+    {
         eprintln!("dxray: {problem}");
     }
 

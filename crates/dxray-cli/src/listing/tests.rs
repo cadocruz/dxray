@@ -72,7 +72,7 @@ fn with_records(games: usize, notes: usize) -> Listing {
 
 fn with_incomplete(games: usize, directories: usize) -> Listing {
     Listing {
-        incomplete: (0..directories).map(|i| format!("dir {i}")).collect(),
+        incomplete: (0..directories).map(|i| vec![format!("dir {i}")]).collect(),
         ..listing(games, 0)
     }
 }
@@ -1076,6 +1076,7 @@ fn a_demoted_game_does_not_lose_the_note_that_moves_the_exit_code() {
     assert!(
         incomplete
             .iter()
+            .flatten()
             .any(|note| note.contains("Proton - Experimental")),
         "the demoted game's truncation is still collected, got {incomplete:?}"
     );
@@ -1099,6 +1100,40 @@ fn a_demoted_game_does_not_lose_the_note_that_moves_the_exit_code() {
                 && line.contains(r#""incomplete":[""#)),
         "the truncation rides on the game it qualifies, got:\n{}",
         rendered.json
+    );
+}
+
+#[test]
+fn a_directory_with_several_gaps_is_counted_once() {
+    // Measured: one Proton build with six notes read as six directories.
+    let tree = Tree::new("gaps");
+    let runtime = tree.install(
+        100,
+        "Proton - Experimental",
+        "Proton Experimental",
+        "rundll.exe",
+    );
+    for exe in ["winhelp.exe", "krnl386.exe"] {
+        std::fs::write(runtime.install_dir.join(exe), b"MZ").expect("executable");
+    }
+    let fake = Fake {
+        roots: vec![tree.path.clone()],
+        games: vec![runtime],
+        ..Fake::new("gaps")
+    };
+
+    let listing = scan(&[&fake]);
+
+    assert_eq!(
+        listing.incomplete.iter().flatten().count(),
+        3,
+        "every gap is still kept, got {:?}",
+        listing.incomplete
+    );
+    let trailer = listing.trailer();
+    assert!(
+        trailer.contains("1 game directory could not be searched in full"),
+        "got: {trailer}"
     );
 }
 
