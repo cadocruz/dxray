@@ -10,7 +10,7 @@ use dxray_core::proton;
 
 use crate::wrap;
 
-/// Width of the label column, matching the `steam` listing so the two read as
+/// Width of the label column, matching the `installed` listing so the two read as
 /// one tool.
 const LABEL: usize = 12;
 /// Where a wrapped value continues, under the first word of the one above it.
@@ -20,7 +20,7 @@ const INDENT: usize = 2 + LABEL;
 pub struct Outcome {
     pub text: String,
     /// True when a question that was asked got no answer. Stricter than
-    /// `steam`: here the policy is the question.
+    /// `installed`: here the policy is the question.
     pub failed: bool,
 }
 

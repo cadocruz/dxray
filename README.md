@@ -104,10 +104,10 @@ List local Steam and Heroic installations:
 dxray installed
 ```
 
-List Steam only:
+List one launcher only:
 
 ```sh
-dxray steam
+dxray installed --launcher steam
 ```
 
 Inspect the NVAPI policy in a Proton installation:
@@ -128,17 +128,20 @@ dxray-tui
 |---|---|---|
 | `inspect` | Reads PE files, or scans directories for `.exe` and `.dll` | `PATH...` |
 | `game` | Ranks the executables in an install directory and analyzes the best | `PATH...` |
-| `installed` | Lists what every supported launcher declares | — |
-| `steam` | Lists what Steam declares | — |
+| `installed` | Lists what the supported launchers declare | — |
 | `nvapi` | Reads a Proton build's static NVAPI policy | `PROTON_PATH` |
 | `help` | Prints help for the program or for one command | `[COMMAND]` |
 
-| Option | `inspect` | `game` | `installed` | `steam` | `nvapi` |
-|---|:-:|:-:|:-:|:-:|:-:|
-| `--json` | ✓ | ✓ | ✓ | ✓ | |
-| `--view compact\|full` | ✓ | ✓ | ✓ | ✓ | |
-| `-r`, `--recursive` | ✓ | | | | |
-| `--appid ID`, repeatable | | | | | ✓ |
+| Option | `inspect` | `game` | `installed` | `nvapi` |
+|---|:-:|:-:|:-:|:-:|
+| `--json` | ✓ | ✓ | ✓ | |
+| `--view compact\|full` | ✓ | ✓ | ✓ | |
+| `-r`, `--recursive` | ✓ | | | |
+| `--launcher steam\|heroic`, repeatable | | | ✓ | |
+| `--appid ID`, repeatable | | | | ✓ |
+
+Without `--launcher`, `installed` asks every launcher. With it, only the ones
+named; a listing of one launcher does not label each game with it.
 
 `--view` cannot be combined with `--json`. Invalid options exit 2 before
 anything is scanned.
@@ -152,8 +155,7 @@ caveats; `--view full` gives absolute paths, versions, imports and the
 executable ranking. Compact output retains each input's path.
 
 The default differs by command. Without `--view`, `inspect` and `game` use the
-standard text layout, while `installed` and `steam` use the compact inventory
-tree.
+standard text layout, while `installed` uses the compact inventory tree.
 
 Direct paths do not provide launcher or Proton context, so those reports mark
 the static NVAPI policy as not assessed.
@@ -174,12 +176,11 @@ Notes and problems remain visible in every view, with the existing exit codes.
 ```sh
 dxray installed
 dxray installed --view full
-dxray steam
-dxray steam --view full
+dxray installed --launcher heroic
 ```
 
-Use `--json` with `inspect`, `game`, `installed` or `steam` when another tool
-will consume the output. `nvapi` intentionally has no JSON format yet.
+Use `--json` with `inspect`, `game` or `installed` when another tool will
+consume the output. `nvapi` intentionally has no JSON format yet.
 
 ```bash
 dxray inspect --view compact path/to/game.exe path/to/another.exe

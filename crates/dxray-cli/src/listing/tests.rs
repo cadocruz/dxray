@@ -396,7 +396,7 @@ fn a_game_says_which_launcher_supplied_it_when_more_than_one_could_have() {
 
 #[test]
 fn the_narrower_listing_does_not_repeat_the_one_launcher_it_was_asked_about() {
-    // `steam` already said Steam; captured output does not change.
+    // One launcher asked about needs no launcher label.
     let mut out = String::new();
     render(&mut out, &[dota()]);
 
@@ -455,7 +455,7 @@ fn a_game_with_no_nvapi_answer_does_not_move_the_exit_code() {
 #[test]
 fn finding_nothing_names_the_places_that_were_searched() {
     // The message names where it looked, so it can be acted on.
-    let message = nothing_found(super::STEAM_ONLY);
+    let message = nothing_found(&[&dxray_core::steam::STEAM]);
 
     assert!(message.contains("no Steam installation found"), "{message}");
     assert!(
@@ -1383,7 +1383,7 @@ fn a_library_with_nothing_in_it_is_a_library_row_with_no_games_under_it() {
 #[test]
 fn finding_no_launcher_at_all_is_a_sentence_rather_than_an_empty_stream() {
     // Nothing scanned still yields a line, unlike an empty machine.
-    let line = nothing_found_json(super::STEAM_ONLY);
+    let line = nothing_found_json(&[&dxray_core::steam::STEAM]);
 
     assert!(line.starts_with(r#"{"kind":"problem","#), "got {line}");
     assert!(!line.contains('\n'), "one object, one line, got {line}");

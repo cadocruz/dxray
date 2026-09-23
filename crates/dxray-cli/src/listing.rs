@@ -1,4 +1,4 @@
-//! Inventory rendering for `installed` and `steam`: one [`dxray_core::walk`]
+//! Inventory rendering for `installed`: one [`dxray_core::walk`]
 //! produces both the text and the JSONL. Installs without game evidence are
 //! grouped last, never filtered.
 
@@ -902,10 +902,6 @@ pub fn nothing_found_json(launchers: &[&dyn Launcher]) -> String {
     out.push('}');
     out
 }
-
-/// Steam alone: the launchers `steam` asks about, where `installed` asks
-/// [`launcher::all`](dxray_core::launcher::all).
-pub const STEAM_ONLY: &[&dyn Launcher] = &[&dxray_core::steam::STEAM];
 
 #[cfg(test)]
 mod tests;

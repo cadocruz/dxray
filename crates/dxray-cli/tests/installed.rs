@@ -30,19 +30,22 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
     )
     .unwrap();
     std::fs::write(steam.join("steamapps/appmanifest_999.acf"), "broken").unwrap();
-    for command in ["installed", "steam"] {
-        let default = dxray_with_home(home.path(), [command]);
-        let json = dxray_with_home(home.path(), [command, "--json"]);
+    for (command, args) in [
+        ("installed", &["installed"][..]),
+        ("steam", &["installed", "--launcher", "steam"][..]),
+    ] {
+        let default = dxray_with_home(home.path(), args.to_vec());
+        let json = dxray_with_home(home.path(), [args, &["--json"][..]].concat());
         assert!(stdout_of(&default).contains("Library:"));
         assert!(stdout_of(&default).contains("├─") || stdout_of(&default).contains("└─"));
-        let compact = dxray_with_home(home.path(), [command, "--view", "compact"]);
+        let compact = dxray_with_home(home.path(), [args, &["--view", "compact"][..]].concat());
         assert_eq!(
             compact.stdout, default.stdout,
             "{command} default must be compact"
         );
         assert_eq!(compact.stderr, default.stderr);
         for view in ["compact", "full"] {
-            let out = dxray_with_home(home.path(), [command, "--view", view]);
+            let out = dxray_with_home(home.path(), [args, &["--view", view][..]].concat());
             let text = stdout_of(&out);
             assert_eq!(out.status.code(), default.status.code());
             assert_eq!(out.stderr, default.stderr);
@@ -70,17 +73,20 @@ fn inventory_views_preserve_entries_diagnostics_and_status() {
             } else {
                 assert_compact_inventory(text, stdout_of(&default), command);
             }
-            let conflict = dxray_with_home(home.path(), [command, "--view", view, "--json"]);
+            let conflict = dxray_with_home(
+                home.path(),
+                [args, &["--view", view, "--json"][..]].concat(),
+            );
             assert_eq!(conflict.status.code(), Some(2));
             assert!(conflict.stdout.is_empty());
             assert!(!stderr_of(&conflict).contains("broken"));
         }
         assert_eq!(
-            dxray_with_home(home.path(), [command]).stdout,
+            dxray_with_home(home.path(), args.to_vec()).stdout,
             default.stdout
         );
         assert_eq!(
-            dxray_with_home(home.path(), [command, "--json"]).stdout,
+            dxray_with_home(home.path(), [args, &["--json"][..]].concat()).stdout,
             json.stdout
         );
     }
@@ -145,7 +151,10 @@ fn compact_steam_uses_each_library_header_for_relative_install_paths() {
     )
     .unwrap();
 
-    let compact = dxray_with_home(home.path(), ["steam", "--view", "compact"]);
+    let compact = dxray_with_home(
+        home.path(),
+        ["installed", "--launcher", "steam", "--view", "compact"],
+    );
     let text = stdout_of(&compact);
     let entries: Vec<_> = text
         .lines()
@@ -164,9 +173,12 @@ fn compact_steam_uses_each_library_header_for_relative_install_paths() {
         2
     );
 
-    let default = dxray_with_home(home.path(), ["steam"]);
-    let full = dxray_with_home(home.path(), ["steam", "--view", "full"]);
-    let json = dxray_with_home(home.path(), ["steam", "--json"]);
+    let default = dxray_with_home(home.path(), ["installed", "--launcher", "steam"]);
+    let full = dxray_with_home(
+        home.path(),
+        ["installed", "--launcher", "steam", "--view", "full"],
+    );
+    let json = dxray_with_home(home.path(), ["installed", "--launcher", "steam", "--json"]);
     assert_eq!(compact.stdout, default.stdout);
     assert_eq!(compact.stderr, default.stderr);
     assert_eq!(full.status.code(), default.status.code());
@@ -182,10 +194,13 @@ fn inventory_views_distinguish_empty_and_unavailable_installs() {
     let root = fake_steam_tool(&home);
     std::fs::remove_file(root.join("steamapps/common/dota 2 beta/dota2.exe")).unwrap();
     std::fs::remove_dir(root.join("steamapps/common/dota 2 beta")).unwrap();
-    for command in ["installed", "steam"] {
-        let default = dxray_with_home(home.path(), [command]);
+    for args in [
+        &["installed"][..],
+        &["installed", "--launcher", "steam"][..],
+    ] {
+        let default = dxray_with_home(home.path(), args.to_vec());
         for view in ["compact", "full"] {
-            let out = dxray_with_home(home.path(), [command, "--view", view]);
+            let out = dxray_with_home(home.path(), [args, &["--view", view][..]].concat());
             assert_eq!(out.status.code(), default.status.code());
             let text = stdout_of(&out);
             assert!(text.contains("no executable found"));
@@ -537,12 +552,16 @@ fn a_machine_with_no_launcher_at_all_says_where_it_looked_under_each_name() {
 
 #[test]
 fn the_narrower_flag_still_answers_only_the_narrower_question() {
-    // `steam` still shows only Steam, with no launcher label.
+    // `--launcher steam` shows only Steam, with no launcher label.
     let home = TempDir::new("games-steam-still-narrow");
     fake_steam(&home);
     fake_heroic(&home, true);
 
-    let text = stdout_of(&dxray_with_home(home.path(), ["steam"])).to_owned();
+    let text = stdout_of(&dxray_with_home(
+        home.path(),
+        ["installed", "--launcher", "steam"],
+    ))
+    .to_owned();
 
     assert!(text.contains("Dota 2"), "got:\n{text}");
     assert!(
@@ -557,6 +576,50 @@ fn the_narrower_flag_still_answers_only_the_narrower_question() {
         text.contains("1 game in 1 library across 1 install"),
         "got:\n{text}"
     );
+}
+
+#[test]
+fn the_launcher_filter_takes_any_launcher_and_every_launcher_named() {
+    let home = TempDir::new("games-launcher-filter");
+    fake_steam(&home);
+    fake_heroic(&home, true);
+
+    let heroic = stdout_of(&dxray_with_home(
+        home.path(),
+        ["installed", "--launcher", "heroic"],
+    ))
+    .to_owned();
+    assert!(heroic.contains("Hades"), "got:\n{heroic}");
+    assert!(!heroic.contains("Dota 2"), "got:\n{heroic}");
+    assert!(!heroic.contains("origin"), "got:\n{heroic}");
+
+    let both = dxray_with_home(
+        home.path(),
+        ["installed", "--launcher", "heroic", "--launcher", "steam"],
+    );
+    let all = dxray_with_home(home.path(), ["installed"]);
+    assert_eq!(
+        stdout_of(&both),
+        stdout_of(&all),
+        "naming every launcher, in any order, is the default"
+    );
+    assert_eq!(both.status.code(), all.status.code());
+}
+
+#[test]
+fn a_filtered_launcher_that_is_absent_is_named_alone() {
+    let home = TempDir::new("games-launcher-absent");
+    fake_steam(&home);
+
+    let out = dxray_with_home(home.path(), ["installed", "--launcher", "heroic"]);
+
+    assert_eq!(out.status.code(), Some(1));
+    let message = stderr_of(&out);
+    assert!(
+        message.contains("no Heroic installation found"),
+        "got:\n{message}"
+    );
+    assert!(!message.contains("Steam"), "got:\n{message}");
 }
 
 #[test]
@@ -767,8 +830,8 @@ fn the_help_names_the_flag_and_what_its_exit_codes_mean() {
 
     assert!(text.contains("installed"), "got:\n{text}");
     assert!(
-        text.contains("installed or steam found no install"),
-        "the 1 has to cover the new flag too, got:\n{text}"
+        text.contains("installed found no install"),
+        "the 1 has to cover every launcher filter, got:\n{text}"
     );
 }
 

@@ -36,7 +36,7 @@ pub fn inspect(dir: &Path, json: bool, presentation: report::Presentation) -> Ou
         Err(error) => return failure(dir, &error, json, presentation),
     };
     let Some(best) = survey.best() else {
-        // No executable to answer with: a failure here, unlike in `steam`,
+        // No executable to answer with: a failure here, unlike in `installed`,
         // where a mid-download install is ordinary.
         return failure(
             dir,

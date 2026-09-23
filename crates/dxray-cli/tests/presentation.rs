@@ -9,7 +9,7 @@ fn subcommand_help_and_option_scopes() {
     for help in ["-h", "--help"] {
         let root = dxray_with_home(home.path(), [help]);
         assert_eq!(root.status.code(), Some(0));
-        for command in ["inspect", "game", "installed", "steam", "nvapi"] {
+        for command in ["inspect", "game", "installed", "nvapi"] {
             assert!(stdout_of(&root).contains(command));
             let out = dxray_with_home(home.path(), [command, help]);
             assert_eq!(out.status.code(), Some(0));
@@ -18,6 +18,7 @@ fn subcommand_help_and_option_scopes() {
             assert_eq!(text.contains("--json"), command != "nvapi");
             assert_eq!(text.contains("--recursive"), command == "inspect");
             assert_eq!(text.contains("--view"), command != "nvapi");
+            assert_eq!(text.contains("--launcher"), command == "installed");
         }
     }
     let mut invalid = vec![
@@ -29,6 +30,10 @@ fn subcommand_help_and_option_scopes() {
         vec!["--json", "inspect", path],
         vec!["--view", "compact", "inspect", path],
         vec!["nvapi", path, "--json"],
+        vec!["steam"],
+        vec!["installed", "--launcher"],
+        vec!["installed", "--launcher", "lutris"],
+        vec!["game", "--launcher", "steam", path],
     ];
     for command in ["inspect", "game"] {
         invalid.push(vec![command, "--appid", "1", path]);
@@ -39,14 +44,12 @@ fn subcommand_help_and_option_scopes() {
             invalid.push(vec![command, "--view", view, "--json", path]);
         }
     }
-    for command in ["installed", "steam", "nvapi"] {
+    for command in ["installed", "nvapi"] {
         invalid.push(vec![command, "--view", "compact", path]);
         invalid.push(vec![command, "--recursive"]);
     }
-    for command in ["installed", "steam"] {
-        invalid.push(vec![command, "--appid", "1"]);
-        invalid.push(vec![command, path]);
-    }
+    invalid.push(vec!["installed", "--appid", "1"]);
+    invalid.push(vec!["installed", path]);
     invalid.push(vec!["game", "--recursive", path]);
     for args in invalid {
         let out = dxray_with_home(home.path(), &args);

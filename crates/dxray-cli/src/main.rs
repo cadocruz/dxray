@@ -31,7 +31,7 @@ use walk::Target;
     name = "dxray",
     version,
     about = "Statically inspect Windows games and launcher libraries.",
-    after_help = "EXIT CODES:\n  0  analysis completed\n  1  unreadable input, incomplete scan or unanswered policy query\n  2  invalid command line; nothing scanned\n\ninstalled or steam found no install: exit 1.\nUnknown static renderer evidence alone is not a failure."
+    after_help = "EXIT CODES:\n  0  analysis completed\n  1  unreadable input, incomplete scan or unanswered policy query\n  2  invalid command line; nothing scanned\n\ninstalled found no install: exit 1.\nUnknown static renderer evidence alone is not a failure."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -44,16 +44,11 @@ enum Commands {
     Inspect(InspectArgs),
     /// Rank executables in game installations and inspect the best candidate.
     Game(GameArgs),
-    /// List installations declared by all supported launchers.
+    /// List installations declared by the supported launchers.
     #[command(
-        after_help = "The default view is compact. Use --view full for complete evidence.\n\nExamples:\n  dxray installed\n  dxray installed --view full\n  dxray installed --json"
+        after_help = "The default view is compact. Use --view full for complete evidence.\n\nExamples:\n  dxray installed\n  dxray installed --launcher steam\n  dxray installed --view full\n  dxray installed --json"
     )]
     Installed(InventoryArgs),
-    /// List installations declared by Steam.
-    #[command(
-        after_help = "The default view is compact. Use --view full for complete evidence.\n\nExamples:\n  dxray steam\n  dxray steam --view full\n  dxray steam --json"
-    )]
-    Steam(InventoryArgs),
     /// Read a Proton build's static NVAPI policy.
     Nvapi(NvapiArgs),
 }
@@ -111,8 +106,37 @@ struct GameArgs {
 
 #[derive(Args)]
 struct InventoryArgs {
+    /// Only this launcher; may be repeated. Every launcher by default.
+    #[arg(long, value_name = "LAUNCHER", value_parser = launcher_keys())]
+    launcher: Vec<String>,
     #[command(flatten)]
     output: OutputArgs,
+}
+
+impl InventoryArgs {
+    /// The launchers asked about, in registry order.
+    fn launchers(&self) -> Vec<&'static dyn dxray_core::Launcher> {
+        dxray_core::launcher::all()
+            .iter()
+            .copied()
+            .filter(|launcher| {
+                self.launcher.is_empty()
+                    || self
+                        .launcher
+                        .iter()
+                        .any(|key| key == launcher.origin().key())
+            })
+            .collect()
+    }
+}
+
+/// Every launcher's key, so a new launcher is accepted without editing this.
+fn launcher_keys() -> clap::builder::PossibleValuesParser {
+    dxray_core::launcher::all()
+        .iter()
+        .map(|launcher| launcher.origin().key())
+        .collect::<Vec<_>>()
+        .into()
 }
 
 #[derive(Args)]
@@ -131,8 +155,7 @@ fn main() -> ExitCode {
         Commands::Game(args) => {
             rank_installs(&args.paths, args.output.json, args.output.presentation())
         }
-        Commands::Installed(args) => list_games(dxray_core::launcher::all(), &args.output),
-        Commands::Steam(args) => list_games(listing::STEAM_ONLY, &args.output),
+        Commands::Installed(args) => list_games(&args.launchers(), &args.output),
         Commands::Nvapi(args) => read_policy(&args.proton_path, &args.appid),
     }
 }
@@ -242,9 +265,8 @@ fn read_policy(target: &Path, appids: &[String]) -> ExitCode {
     }
 }
 
-/// Prints what `launchers` have installed; `installed` and `steam` differ only
-/// in the launchers they pass. Finding no installation exits 1 and names where
-/// it looked. `json` only chooses which rendering is printed.
+/// Prints what `launchers` have installed. Finding no installation exits 1 and
+/// names where it looked. `json` only chooses which rendering is printed.
 fn list_games(launchers: &[&dyn dxray_core::Launcher], output: &OutputArgs) -> ExitCode {
     let json = output.json;
     let found = listing::scan_with_view(launchers, output.inventory_presentation());

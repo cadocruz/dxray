@@ -227,7 +227,7 @@ fn the_json_line_appends_the_ranking_without_disturbing_the_frozen_keys() {
 
 #[test]
 fn a_directory_with_no_executable_in_it_fails_rather_than_printing_a_blank_ranking() {
-    // No executable at all fails `game`, unlike `steam`.
+    // No executable at all fails `game`, unlike `installed`.
     let dir = TempDir::new("game-empty");
     dir.write("readme.txt", b"nothing to see");
 

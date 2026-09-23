@@ -1,4 +1,4 @@
-//! End to end tests for `nvapi`, and the NVAPI rows under `steam`: the real
+//! End to end tests for `nvapi`, and the NVAPI rows under `installed`: the real
 //! binary, a fake Proton install, real exit codes. The scripts are cut down
 //! from real Proton releases.
 
@@ -371,7 +371,7 @@ fn the_steam_listing_names_the_build_a_game_ran_under_and_what_it_does_to_nvapi(
     )
     .expect("config_info");
 
-    let out = dxray_with_home(home.path(), ["steam"]);
+    let out = dxray_with_home(home.path(), ["installed", "--launcher", "steam"]);
     let text = unwrapped(&out);
 
     assert!(
@@ -398,7 +398,7 @@ fn a_game_that_has_never_run_under_proton_gets_a_row_and_costs_no_exit_code() {
     )
     .expect("manifest");
 
-    let out = dxray_with_home(home.path(), ["steam"]);
+    let out = dxray_with_home(home.path(), ["installed", "--launcher", "steam"]);
     let text = unwrapped(&out);
 
     assert!(
