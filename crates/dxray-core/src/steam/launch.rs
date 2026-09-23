@@ -330,6 +330,32 @@ mod tests {
     }
 
     #[test]
+    fn a_real_value_reads_as_the_environment_steam_hands_proton() {
+        // Copied from a real `localconfig.vdf`, escapes and all.
+        let root = TempDir::new("launches-real");
+        root.write(
+            "userdata/12345/config/localconfig.vdf",
+            &localconfig(
+                r#"PROTON_FORCE_NVAPI=1 PROTON_DLSS_INDICATOR=1 MANGOHUD=1 PROTON_ENABLE_NGX_UPDATER=1 WINEDLLOVERRIDES=\"dxgi=n,b;nvngx=n,b;_nvngx=n,b;d3dcompiler_47=n,b\" %command%"#,
+            ),
+        );
+
+        assert_eq!(
+            launches(root.path()).environment(1_088_850),
+            Ok(pairs(&[
+                ("PROTON_FORCE_NVAPI", "1"),
+                ("PROTON_DLSS_INDICATOR", "1"),
+                ("MANGOHUD", "1"),
+                ("PROTON_ENABLE_NGX_UPDATER", "1"),
+                (
+                    "WINEDLLOVERRIDES",
+                    "dxgi=n,b;nvngx=n,b;_nvngx=n,b;d3dcompiler_47=n,b"
+                ),
+            ]))
+        );
+    }
+
+    #[test]
     fn no_userdata_means_no_launch_options() {
         let root = TempDir::new("no-userdata");
         assert_eq!(launches(root.path()).environment(570), Ok(Vec::new()));
