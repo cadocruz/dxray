@@ -11,7 +11,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::launcher::{Catalogue, Identity, Libraries, Origin};
+use crate::launcher::{Catalogue, Identity, Libraries, Origin, identity};
 use crate::vdf::{self, Object, Value};
 
 pub mod launch;
@@ -573,12 +573,6 @@ fn read_first(root: &Path, relatives: &[&str]) -> Result<Option<(PathBuf, String
 fn dedup_paths(paths: &mut Vec<PathBuf>) {
     let mut seen = HashSet::new();
     paths.retain(|p| seen.insert(identity(p)));
-}
-
-/// What makes two paths the same directory: the resolved path, or the path as
-/// written when it cannot be resolved, so an unmounted library stays listed.
-fn identity(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]

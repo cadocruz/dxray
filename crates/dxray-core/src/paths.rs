@@ -106,8 +106,7 @@ fn container_homes_under(mounts: &[PathBuf]) -> Vec<PathBuf> {
                     continue;
                 }
                 for home in [path.clone(), path.join("home"), path.join("root")] {
-                    let identity = fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
-                    if home.is_dir() && seen.insert(identity) {
+                    if home.is_dir() && seen.insert(crate::launcher::identity(&home)) {
                         homes.push(home);
                     }
                 }

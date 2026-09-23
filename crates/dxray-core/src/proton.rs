@@ -247,8 +247,7 @@ fn roots_named(text: &str) -> Vec<PathBuf> {
 /// Whether two paths are the same directory, resolving symlinks when they can
 /// be resolved and comparing the text when they cannot.
 fn same(a: &Path, b: &Path) -> bool {
-    let resolve = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    resolve(a) == resolve(b)
+    crate::launcher::identity(a) == crate::launcher::identity(b)
 }
 
 /// What one game's NVAPI question came to, with more than any one caller

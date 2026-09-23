@@ -362,9 +362,9 @@ pub fn walk(launchers: &[&dyn Launcher], visitor: &mut dyn Visitor) -> ControlFl
     ControlFlow::Continue(())
 }
 
-/// What makes two library paths the same directory: the resolved path, or the
-/// path as written when it cannot be resolved, so an unmounted drive stays in
-/// the walk.
+/// What makes two paths the same directory: the resolved path, or the path as
+/// written when it cannot be resolved, so an unmounted drive stays in the walk.
+/// The one rule every path comparison in this crate uses.
 #[must_use]
 pub fn identity(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())

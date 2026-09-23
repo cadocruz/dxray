@@ -244,7 +244,7 @@ fn existing_roots(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
     candidates
         .into_iter()
         .filter(|path| path.join("store_cache").is_dir())
-        .filter(|path| seen.insert(fs::canonicalize(path).unwrap_or_else(|_| path.clone())))
+        .filter(|path| seen.insert(crate::launcher::identity(path)))
         .collect()
 }
 
