@@ -339,6 +339,11 @@ fn every_view_prints_the_nvapi_answer_of_a_game_that_could_not_be_read() {
         let text = render_view(&[dota()], false, view).text;
         assert!(text.contains("NVAPI"), "{name} dropped it, got:\n{text}");
     }
+    // And full keeps the roots it promises.
+    let full = render_view(&[dota()], false, crate::report::Presentation::Full).text;
+    for row in ["Library: /not/a/library", "Launcher root: /not/an/install"] {
+        assert!(full.contains(row), "missing {row:?}, got:\n{full}");
+    }
 }
 
 #[test]

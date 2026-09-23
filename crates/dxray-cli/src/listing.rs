@@ -609,10 +609,7 @@ fn tree_entry(
                 tree_row(&mut out, "Features", &details.features.join(", "));
             }
             if presentation == Presentation::Full {
-                tree_row(&mut out, "Library", &display_path(place.library));
-                if let Some(root) = place.install {
-                    tree_row(&mut out, "Launcher root", &display_path(root));
-                }
+                roots(&mut out, place);
                 if let Some(report) = &details.full_report {
                     tree_block(&mut out, report);
                 }
@@ -621,7 +618,12 @@ fn tree_entry(
                 }
             }
         }
-        Some(error) => tree_row(&mut out, "Status", error),
+        Some(error) => {
+            tree_row(&mut out, "Status", error);
+            if presentation == Presentation::Full {
+                roots(&mut out, place);
+            }
+        }
     }
 
     if let Some(script) = &nvapi.script {
@@ -659,6 +661,14 @@ fn tree_entry(
         tree_row(&mut out, "NVAPI", &nvapi.verdict);
     }
     out
+}
+
+/// The library and launcher roots the full view names for every game.
+fn roots(out: &mut String, place: Place<'_>) {
+    tree_row(out, "Library", &display_path(place.library));
+    if let Some(root) = place.install {
+        tree_row(out, "Launcher root", &display_path(root));
+    }
 }
 
 /// A scan-sized NVAPI summary. The complete policy sentence stays in `full`,
