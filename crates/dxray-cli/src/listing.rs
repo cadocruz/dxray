@@ -654,6 +654,10 @@ fn tree_entry(
     {
         tree_row(&mut out, "NVAPI", nvapi_brief(nvapi));
     }
+    // Full prints the sentence inside the report; with no report, here.
+    if presentation == Presentation::Full && details.full_report.is_none() {
+        tree_row(&mut out, "NVAPI", &nvapi.verdict);
+    }
     out
 }
 

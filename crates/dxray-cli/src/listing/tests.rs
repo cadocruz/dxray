@@ -330,6 +330,18 @@ fn render_view(
 }
 
 #[test]
+fn every_view_prints_the_nvapi_answer_of_a_game_that_could_not_be_read() {
+    for (name, view) in [
+        ("compact", crate::report::Presentation::Compact),
+        ("standard", crate::report::Presentation::Standard),
+        ("full", crate::report::Presentation::Full),
+    ] {
+        let text = render_view(&[dota()], false, view).text;
+        assert!(text.contains("NVAPI"), "{name} dropped it, got:\n{text}");
+    }
+}
+
+#[test]
 fn inventory_presentations_leave_json_bytes_unchanged() {
     let tree = Tree::new("view-json-bytes");
     let games = vec![tree.install(570, "entry", "Entry", "Entry.exe")];
