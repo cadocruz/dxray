@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "dxray-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "dxray-core",
@@ -279,18 +279,18 @@ dependencies = [
 
 [[package]]
 name = "dxray-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dxray-pe",
 ]
 
 [[package]]
 name = "dxray-pe"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "dxray-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dxray-core",
  "ratatui",
