@@ -19,7 +19,7 @@ perform.
 
 ## Support
 
-Version 0.2.0 supports desktop Linux. Steam and Heroic discovery read local
+Version 0.3.0 supports desktop Linux. Steam and Heroic discovery read local
 installation metadata.
 
 Flatpak (Steam, Heroic) and Snap (Steam) locations are searched, but those
@@ -42,7 +42,7 @@ nothing about it depends on the host's glibc. The `gnu` build is dynamically
 linked against the system C library.
 
 ```sh
-version=0.2.0
+version=0.3.0
 target=x86_64-unknown-linux-musl
 base=https://github.com/cadocruz/dxray/releases/download/v$version
 
