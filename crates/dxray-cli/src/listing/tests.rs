@@ -330,6 +330,21 @@ fn render_view(
 }
 
 #[test]
+fn the_short_nvapi_label_uses_the_verdict_own_words() {
+    // One fact, one spelling: the full verdict says "offered" and "withheld".
+    for (available, word) in [(true, "offered"), (false, "withheld")] {
+        let answer = dxray_core::proton::Answer {
+            script: None,
+            verdict: String::new(),
+            available: Some(available),
+            condition: Vec::new(),
+            basis: dxray_core::proton::Basis::Unread,
+        };
+        assert_eq!(super::nvapi_brief(&answer), word);
+    }
+}
+
+#[test]
 fn every_view_prints_the_nvapi_answer_of_a_game_that_could_not_be_read() {
     for (name, view) in [
         ("compact", crate::report::Presentation::Compact),

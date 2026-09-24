@@ -675,7 +675,7 @@ fn roots(out: &mut String, place: Place<'_>) {
 /// where it can be read without displacing the next game in the inventory.
 fn nvapi_brief(answer: &dxray_core::proton::Answer) -> &'static str {
     match (answer.available, &answer.basis) {
-        (Some(true), _) => "allowed",
+        (Some(true), _) => "offered",
         (Some(false), _) => "withheld",
         (None, Basis::NotApplicable) => "not applicable",
         (None, Basis::NeverLaunched | Basis::Unread | Basis::Read(_)) => "not determined",
