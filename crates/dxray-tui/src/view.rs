@@ -74,7 +74,7 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::List {
         render_list(app, &theme, frame, areas.list, frame.area().width);
     }
-    if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus == Focus::Detail {
+    if frame.area().width >= crate::layout::SPLIT_WIDTH || app.focus != Focus::List {
         render_detail(app, &theme, frame, areas.detail);
     }
     let evidence_help = if app.evidence_expanded {
@@ -82,7 +82,14 @@ pub(crate) fn render(app: &App, frame: &mut ratatui::Frame<'_>) {
     } else {
         "Enter expand evidence"
     };
-    if app.focus == Focus::Detail && app.selected_entry().is_some() {
+    let evidence_help = if app.focus == Focus::Diagnostics {
+        "Tab back to the list"
+    } else {
+        evidence_help
+    };
+    if app.focus == Focus::Diagnostics
+        || (app.focus == Focus::Detail && app.selected_entry().is_some())
+    {
         let help = if frame.area().width < crate::layout::SPLIT_WIDTH {
             format!("{evidence_help}\nTab/Shift-Tab pane · ↑↓ scroll\nPgUp/PgDn · Esc · Ctrl-C")
         } else if frame.area().width < 160 {
@@ -541,8 +548,12 @@ fn render_detail(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
 ) {
-    let mut title = "Details".to_owned();
-    if app.focus == Focus::Detail {
+    let mut title = if app.focus == Focus::Diagnostics {
+        "Scan diagnostics".to_owned()
+    } else {
+        "Details".to_owned()
+    };
+    if app.focus != Focus::List {
         title.push_str(" · active");
     }
     let content_lines = detail_line_count(app);
@@ -569,10 +580,10 @@ fn render_detail(
         theme
             .titled_block(title)
             .style(theme.text)
-            .border_style(if app.focus == Focus::Detail {
-                theme.focused_border
-            } else {
+            .border_style(if app.focus == Focus::List {
                 theme.border
+            } else {
+                theme.focused_border
             });
     let inner = block.inner(area);
     render_if_visible(frame, block, area);
@@ -608,6 +619,16 @@ fn render_detail(
 }
 
 fn summary_lines(app: &App, width: usize, compact: bool) -> Vec<Line<'static>> {
+    if app.focus == Focus::Diagnostics {
+        let count = diagnostic_count(app);
+        if compact {
+            return vec![Line::from(clip_text(&format!("Scan: {count}"), width))];
+        }
+        return vec![
+            Line::from("Scope: entire scan").style(Modifier::BOLD),
+            Line::from(count),
+        ];
+    }
     app.selected_entry().map_or_else(
         || {
             if compact {
@@ -691,22 +712,47 @@ fn panel_lines(app: &App) -> Vec<Line<'static>> {
 
 // Rendering and scroll measurement share the same body.
 fn body_lines(app: &App) -> Vec<Line<'static>> {
+    if app.focus == Focus::Diagnostics {
+        return app
+            .problems
+            .iter()
+            .map(|message| {
+                let line = Line::from(format!("{}: {}", message.label(), message.text()));
+                match message {
+                    ScanMessage::Problem(_) => line.style(Style::new().fg(ERROR).bg(BACKGROUND)),
+                    ScanMessage::Note(_) => line,
+                }
+            })
+            .collect();
+    }
     let mut lines = app
         .selected_entry()
         .map_or_else(Vec::new, |entry| detail_lines(entry, app.evidence_expanded));
+    // The scan's own messages are drawn once, behind Tab; each game only
+    // says they are there.
     if !app.problems.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from("Scan diagnostics:").style(Modifier::BOLD));
-        lines.push(Line::from("Scope: entire scan"));
-        lines.extend(app.problems.iter().map(|message| {
-            let line = Line::from(format!("{}: {}", message.label(), message.text()));
-            match message {
-                ScanMessage::Problem(_) => line.style(Style::new().fg(ERROR).bg(BACKGROUND)),
-                ScanMessage::Note(_) => line,
-            }
-        }));
+        lines.push(muted_line(format!(
+            "Scan diagnostics: {} · Tab to view",
+            diagnostic_count(app)
+        )));
     }
     lines
+}
+
+/// "2 problems, 1 note", as the header counts them.
+fn diagnostic_count(app: &App) -> String {
+    let problems = app
+        .problems
+        .iter()
+        .filter(|message| matches!(message, ScanMessage::Problem(_)))
+        .count();
+    let notes = app.problems.len() - problems;
+    format!(
+        "{problems} problem{}, {notes} note{}",
+        if problems == 1 { "" } else { "s" },
+        if notes == 1 { "" } else { "s" }
+    )
 }
 
 /// The body widget is also the source of its rendered line count. Keeping the
@@ -933,7 +979,8 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(collapsed.contains("Entry notes:"));
-            assert!(collapsed.contains("Scope: entire scan"));
+            assert!(collapsed.contains("Scan diagnostics: 1 problem, 0 notes · Tab to view"));
+            assert!(!collapsed.contains("global diagnostic"));
             assert!(!collapsed.contains("/games/tf2"));
             assert!(!collapsed.contains("d3d12.dll (import)"));
             assert!(draw(&app, width, 30).contains("Enter expand evidence"));
@@ -949,7 +996,11 @@ mod tests {
             app.update(Msg::Key(Key::PageDown));
             app.update(Msg::Resize(width, 13));
             app.update(Msg::Key(Key::End));
-            assert!(draw(&app, width, 13).contains("global diagnostic"));
+            assert_eq!(
+                app.detail_offset,
+                super::detail_line_count(&app)
+                    .saturating_sub(crate::layout::detail_rows(width, 13))
+            );
             app.update(Msg::Key(Key::Enter));
             assert!(!app.evidence_expanded);
             assert!(
@@ -1340,8 +1391,22 @@ mod tests {
         app.update(Msg::Resize(180, 50));
         let screen = draw(&app, 180, 50);
         assert!(screen.contains("Team Fortress 2"));
-        assert!(screen.contains("Problem: could not read /steam/libraryfolders.vdf"));
-        assert!(screen.contains("Note: library is declared twice"));
+        // A game only points at the scan's messages; Tab shows them once.
+        assert!(
+            screen.contains("Scan diagnostics: 1 problem, 1 note · Tab to view"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Problem: could not read"), "{screen}");
+
+        app.update(Msg::Key(crate::key::Key::Tab));
+        app.update(Msg::Key(crate::key::Key::Tab));
+        let diagnostics = draw(&app, 180, 50);
+        assert!(
+            diagnostics.contains("Scan diagnostics · active"),
+            "{diagnostics}"
+        );
+        assert!(diagnostics.contains("Problem: could not read /steam/libraryfolders.vdf"));
+        assert!(diagnostics.contains("Note: library is declared twice"));
     }
 
     #[test]
@@ -1504,15 +1569,16 @@ mod tests {
 
             app.set_filter("");
             app.update(Msg::Key(crate::Key::Tab));
+            app.update(Msg::Key(crate::Key::Tab));
             app.update(Msg::Key(crate::Key::End));
             let diagnostics = draw(&app, width, 24);
             assert!(
                 diagnostics.contains("Problem: unreadable library"),
-                "diagnostic is not reachable with Tab then End at {width}: {diagnostics}"
+                "diagnostic is not reachable with Tab, Tab then End at {width}: {diagnostics}"
             );
             assert!(
                 diagnostics.contains("Note: duplicate library"),
-                "note is not reachable with Tab then End at {width}: {diagnostics}"
+                "note is not reachable with Tab, Tab then End at {width}: {diagnostics}"
             );
         }
     }
@@ -1563,9 +1629,23 @@ mod tests {
         assert!(!header.contains("Warning"));
         assert!(screen.contains("Search 0/1: [z]"));
         assert!(screen.contains("No matches; Esc clears search."));
-        assert!(screen.contains("Problem: unreadable library"));
-        assert!(screen.contains("Note: duplicate library"));
+        assert!(
+            screen.contains("Scan diagnostics: 1 problem, 2 notes · Tab to view"),
+            "{screen}"
+        );
         assert!(!screen.contains("3 scan notes"));
+
+        app.update(Msg::Key(crate::key::Key::Tab));
+        app.update(Msg::Key(crate::key::Key::Tab));
+        let diagnostics = draw(&app, 120, 24);
+        assert!(
+            diagnostics.contains("Problem: unreadable library"),
+            "{diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("Note: duplicate library"),
+            "{diagnostics}"
+        );
     }
 
     #[test]
@@ -1728,13 +1808,21 @@ mod tests {
             let selected = screen.find("Identity / origin:").unwrap();
             let notes = screen.find("Entry notes:").unwrap();
             let local = screen.find("Note: selection remains uncertain").unwrap();
-            let scan = screen.find("Scan diagnostics:").unwrap();
-            let problem = screen.find("Problem: unreadable library").unwrap();
-            let note = screen.find("Note: duplicate library").unwrap();
-            assert!(selected < notes && notes < local && local < scan);
-            assert!(scan < problem && problem < note);
-            assert!(screen.contains("Scope: entire scan"));
+            let pointer = screen.find("Scan diagnostics: 1 problem, 1 note").unwrap();
+            assert!(selected < notes && notes < local && local < pointer);
+            assert!(!screen.contains("Problem: unreadable library"), "{screen}");
             assert!(!screen.contains("Warning:"));
+
+            app.focus = crate::app::Focus::Diagnostics;
+            let scan = draw(&app, width, 60);
+            let problem = scan.find("Problem: unreadable library").unwrap();
+            let note = scan.find("Note: duplicate library").unwrap();
+            assert!(problem < note);
+            assert!(scan.contains("Scope: entire scan"));
+            assert!(
+                !scan.contains("Note: selection remains uncertain"),
+                "{scan}"
+            );
         }
     }
 
@@ -1757,17 +1845,18 @@ mod tests {
         app.update(Msg::Game(Box::new(entry)));
         app.update(Msg::test_problem("scan failure"));
         app.update(Msg::test_note("scan note"));
-        app.focus = crate::app::Focus::Detail;
         let selected = app.selected;
         for width in [180, 60, 32, 100] {
             app.update(Msg::Resize(width, 30));
+            app.focus = crate::app::Focus::Detail;
             app.update(Msg::Key(crate::key::Key::End));
+            app.update(Msg::Key(crate::key::Key::Tab));
+            assert_eq!(app.focus, crate::app::Focus::Diagnostics);
             let screen = draw(&app, width, 30);
-            assert!(screen.contains("Scan diagnostics:"), "{screen}");
             assert!(screen.contains("Problem: scan failure"), "{screen}");
             assert!(screen.contains("Note: scan note"), "{screen}");
             assert_eq!(app.selected, selected);
-            app.update(Msg::Key(crate::key::Key::Home));
+            app.update(Msg::Key(crate::key::Key::BackTab));
             assert!(draw(&app, width, 30).contains("Identity / origin:"));
         }
     }
@@ -2113,14 +2202,16 @@ mod tests {
     #[test]
     fn minimum_detail_end_uses_the_rendered_wrap_count() {
         let mut app = App::new(12);
-        let entry = ranked_entry(Ok(analyse(&Evidence {
+        let mut entry = ranked_entry(Ok(analyse(&Evidence {
             imports: vec!["d3d12.dll".into()],
             ..Evidence::default()
         })));
+        // Ratatui wraps this over rows at width 30; End must land on the last.
+        entry
+            .notes
+            .push("aa    aaaaaaaaaaaaaaa aaaaaaaaaa FINAL".into());
         app.update(Msg::Resize(32, 12));
         app.update(Msg::Game(Box::new(entry)));
-        // Ratatui wraps this to two rows at width 30; End must land on the last.
-        app.update(Msg::test_problem("aa    aaaaaaaaaaaaaaa aaaaaaaaaa FINAL"));
         app.update(Msg::Key(crate::Key::Tab));
         app.update(Msg::Key(crate::Key::Home));
 
@@ -2177,7 +2268,6 @@ mod tests {
             entry.notes = (0..30).map(|index| format!("long note {index}")).collect();
             app.update(Msg::Resize(width, 13));
             app.update(Msg::Game(Box::new(entry)));
-            app.update(Msg::test_problem("last scroll row"));
             app.update(Msg::Key(crate::Key::Tab));
 
             let first = draw(&app, width, 13);
@@ -2198,10 +2288,7 @@ mod tests {
                 last.contains("Renderer (static): Direct3D 12"),
                 "{width}:\n{last}"
             );
-            assert!(
-                last.contains("Problem: last scroll row"),
-                "{width}:\n{last}"
-            );
+            assert!(last.contains("long note 29"), "{width}:\n{last}");
             assert!(last.contains("↑ more"), "{width}:\n{last}");
         }
     }

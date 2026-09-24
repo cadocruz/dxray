@@ -13,6 +13,9 @@ use crate::msg::{Msg, ScanDiagnostic};
 pub(crate) enum Focus {
     List,
     Detail,
+    /// The scan's problems and notes, drawn once in the detail pane rather
+    /// than under every game. Reachable only when there are some.
+    Diagnostics,
 }
 
 /// State that is safe to mutate on the terminal thread.
@@ -302,15 +305,28 @@ impl App {
         self.detail_offset = self.detail_offset.min(max);
     }
 
+    /// Moves focus. The detail pane shows other content in and out of
+    /// diagnostics, so its scroll starts over there.
+    fn focus_on(&mut self, focus: Focus) {
+        if (self.focus == Focus::Diagnostics) != (focus == Focus::Diagnostics) {
+            self.detail_offset = 0;
+        }
+        self.focus = focus;
+    }
+
     fn key(&mut self, key: Key) {
         match key {
             Key::Interrupt => self.quitting = true,
-            Key::Tab | Key::BackTab => {
-                self.focus = match self.focus {
-                    Focus::List => Focus::Detail,
-                    Focus::Detail => Focus::List,
-                }
-            }
+            Key::Tab => self.focus_on(match self.focus {
+                Focus::List => Focus::Detail,
+                Focus::Detail if !self.problems.is_empty() => Focus::Diagnostics,
+                Focus::Detail | Focus::Diagnostics => Focus::List,
+            }),
+            Key::BackTab => self.focus_on(match self.focus {
+                Focus::List if !self.problems.is_empty() => Focus::Diagnostics,
+                Focus::List | Focus::Diagnostics => Focus::Detail,
+                Focus::Detail => Focus::List,
+            }),
             // Every printable character is filter text. Esc clears the filter,
             // then quits.
             Key::Escape if self.filter.is_empty() => self.quitting = true,
@@ -326,17 +342,17 @@ impl App {
                 self.filter.pop();
                 self.filter_changed();
             }
-            Key::Up if self.focus == Focus::Detail => {
+            Key::Up if self.focus != Focus::List => {
                 self.detail_offset = self.detail_offset.saturating_sub(1);
             }
-            Key::Down if self.focus == Focus::Detail => {
+            Key::Down if self.focus != Focus::List => {
                 self.detail_offset = self.detail_offset.saturating_add(1);
                 self.clamp_detail_offset();
             }
-            Key::PageUp if self.focus == Focus::Detail => self.detail_page(-1),
-            Key::PageDown if self.focus == Focus::Detail => self.detail_page(1),
-            Key::Home if self.focus == Focus::Detail => self.detail_offset = 0,
-            Key::End if self.focus == Focus::Detail => {
+            Key::PageUp if self.focus != Focus::List => self.detail_page(-1),
+            Key::PageDown if self.focus != Focus::List => self.detail_page(1),
+            Key::Home if self.focus != Focus::List => self.detail_offset = 0,
+            Key::End if self.focus != Focus::List => {
                 self.detail_offset = usize::MAX;
                 self.clamp_detail_offset();
             }
@@ -792,6 +808,36 @@ mod tests {
         assert_eq!(app.selected, None);
         assert_eq!(app.offset, 0);
         assert!(app.visible_entries().is_empty());
+    }
+
+    #[test]
+    fn scan_diagnostics_are_a_third_tab_stop_only_when_there_are_some() {
+        let mut app = App::new(10);
+        let mut first = game(10, "First");
+        first.notes = (0..30).map(|index| format!("detail {index}")).collect();
+        app.update(Msg::Game(Box::new(first)));
+
+        for (key, focus) in [(Key::Tab, Focus::Detail), (Key::Tab, Focus::List)] {
+            app.update(Msg::Key(key));
+            assert_eq!(app.focus, focus, "no diagnostics, no third stop");
+        }
+
+        app.update(Msg::test_problem("unreadable library"));
+        app.update(Msg::Key(Key::Tab));
+        app.update(Msg::Key(Key::Down));
+        assert_eq!(app.detail_offset, 1);
+        app.update(Msg::Key(Key::Tab));
+        assert_eq!(app.focus, Focus::Diagnostics);
+        assert_eq!(
+            app.detail_offset, 0,
+            "other content, so the scroll starts over"
+        );
+        app.update(Msg::Key(Key::Tab));
+        assert_eq!(app.focus, Focus::List);
+        for focus in [Focus::Diagnostics, Focus::Detail, Focus::List] {
+            app.update(Msg::Key(Key::BackTab));
+            assert_eq!(app.focus, focus, "Shift-Tab walks the stops backwards");
+        }
     }
 
     #[test]
