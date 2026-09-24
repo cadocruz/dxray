@@ -2,14 +2,15 @@ use std::path::PathBuf;
 
 use super::{Launch, NoLaunch, launch};
 use crate::heroic::Store;
+use crate::nvapi::SetBy;
 use crate::testutil::TempDir;
 
 const APP: &str = "e0fa47ae79514345823bff209ae29451";
 
-fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
+fn vars(values: &[(&str, &str, SetBy)]) -> Vec<(String, String, SetBy)> {
     values
         .iter()
-        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .map(|(key, value, set_by)| ((*key).to_owned(), (*value).to_owned(), *set_by))
         .collect()
 }
 
@@ -43,10 +44,10 @@ fn a_proton_game_hands_over_its_prefix_options_and_the_switch_heroic_sets() {
         Ok(Launch {
             prefix: PathBuf::from("/games/prefix"),
             // Heroic's switch comes last, so it wins over the option.
-            environment: pairs(&[
-                ("PROTON_DISABLE_NVAPI", "0"),
-                ("WINEDLLOVERRIDES", "dxgi=n,b"),
-                ("PROTON_DISABLE_NVAPI", "1"),
+            environment: vars(&[
+                ("PROTON_DISABLE_NVAPI", "0", SetBy::Heroic),
+                ("WINEDLLOVERRIDES", "dxgi=n,b", SetBy::Heroic),
+                ("PROTON_DISABLE_NVAPI", "1", SetBy::HeroicSwitch),
             ]),
             appid: Ok("752590".to_owned()),
         })
@@ -63,7 +64,10 @@ fn a_setting_the_game_leaves_out_comes_from_the_defaults() {
 
     let launch = launch(root.path(), Store::Epic, APP).expect("a Proton launch");
 
-    assert_eq!(launch.environment, pairs(&[("PROTON_DISABLE_NVAPI", "1")]));
+    assert_eq!(
+        launch.environment,
+        vars(&[("PROTON_DISABLE_NVAPI", "1", SetBy::HeroicSwitch)])
+    );
     assert_eq!(
         launch.appid,
         Ok("0".to_owned()),
@@ -83,9 +87,9 @@ fn with_no_nvapi_setting_anywhere_heroic_enables_it() {
 
     assert_eq!(
         launch.environment,
-        pairs(&[
-            ("PROTON_ENABLE_NVAPI", "1"),
-            ("DXVK_NVAPI_ALLOW_OTHER_DRIVERS", "1")
+        vars(&[
+            ("PROTON_ENABLE_NVAPI", "1", SetBy::HeroicSwitch),
+            ("DXVK_NVAPI_ALLOW_OTHER_DRIVERS", "1", SetBy::HeroicSwitch),
         ])
     );
     assert_eq!(

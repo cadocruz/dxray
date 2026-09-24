@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::path::{Component, Path, PathBuf};
 
-use dxray_core::proton::Builds;
+use dxray_core::proton::{Basis, Builds};
 use dxray_core::{Catalogue, Game, Launcher, Origin};
 
 use crate::record::{Record, display_path, push_optional, push_quoted, push_string};
@@ -652,7 +652,7 @@ fn tree_entry(
     }
     if presentation != Presentation::Full
         && nvapi.script.is_none()
-        && nvapi_brief(nvapi) != "not applicable"
+        && nvapi.basis != Basis::NotApplicable
     {
         tree_row(&mut out, "NVAPI", nvapi_brief(nvapi));
     }
@@ -674,13 +674,11 @@ fn roots(out: &mut String, place: Place<'_>) {
 /// A scan-sized NVAPI summary. The complete policy sentence stays in `full`,
 /// where it can be read without displacing the next game in the inventory.
 fn nvapi_brief(answer: &dxray_core::proton::Answer) -> &'static str {
-    match answer.available {
-        Some(true) => "allowed",
-        Some(false) => "withheld",
-        None if answer.verdict.starts_with("not applicable") => "not applicable",
-        None if answer.verdict.starts_with("not determined") => "not determined",
-        None if answer.script.is_some() => "not determined",
-        None => "not assessed",
+    match (answer.available, &answer.basis) {
+        (Some(true), _) => "allowed",
+        (Some(false), _) => "withheld",
+        (None, Basis::NotApplicable) => "not applicable",
+        (None, Basis::NeverLaunched | Basis::Unread | Basis::Read(_)) => "not determined",
     }
 }
 

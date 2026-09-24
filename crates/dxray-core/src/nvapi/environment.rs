@@ -173,8 +173,11 @@ pub enum SetBy {
     /// A Steam game's launch options.
     #[default]
     LaunchOptions,
-    /// A Heroic game's settings, or the switch Heroic sets from them.
+    /// A Heroic game's environment options.
     Heroic,
+    /// The variable Heroic sets from its DXVK-NVAPI setting
+    /// (`autoInstallDxvkNvapi`), over the game's own options.
+    HeroicSwitch,
     UserSettings,
 }
 
@@ -182,7 +185,8 @@ impl SetBy {
     fn as_str(self) -> &'static str {
         match self {
             Self::LaunchOptions => "launch options",
-            Self::Heroic => "Heroic's settings",
+            Self::Heroic => "Heroic's environment options",
+            Self::HeroicSwitch => "Heroic's DXVK-NVAPI setting",
             Self::UserSettings => "user_settings.py",
         }
     }
@@ -194,8 +198,7 @@ impl SetBy {
 /// absent (`if key not in self.env` in every release since 6.3).
 #[derive(Debug, Clone, Default)]
 pub struct Environment {
-    launch: Vec<(String, String)>,
-    launch_by: SetBy,
+    launch: Vec<(String, String, SetBy)>,
     settings: Vec<(String, String)>,
     launch_unseen: Option<String>,
     settings_unseen: Option<String>,
@@ -211,6 +214,21 @@ impl Environment {
     /// `launch` is the parsed launch options, or why they could not be read.
     #[must_use]
     pub fn new(launch: Result<Vec<(String, String)>, String>, settings: &UserSettings) -> Self {
+        let launch = launch.map(|values| {
+            values
+                .into_iter()
+                .map(|(name, value)| (name, value, SetBy::LaunchOptions))
+                .collect()
+        });
+        Self::sourced(launch, settings)
+    }
+
+    /// The same, with each launch variable naming where it came from.
+    #[must_use]
+    pub fn sourced(
+        launch: Result<Vec<(String, String, SetBy)>, String>,
+        settings: &UserSettings,
+    ) -> Self {
         let (launch, launch_unseen) = match launch {
             Ok(values) => (values, None),
             Err(why) => (Vec::new(), Some(why)),
@@ -228,27 +246,28 @@ impl Environment {
         };
         Self {
             launch,
-            launch_by: SetBy::LaunchOptions,
             settings,
             launch_unseen,
             settings_unseen,
         }
     }
 
-    /// Names where the launch variables came from, when not launch options.
-    #[must_use]
-    pub fn launched_by(self, launch_by: SetBy) -> Self {
-        Self { launch_by, ..self }
-    }
-
     fn get(&self, variable: &str) -> Lookup<'_> {
-        if let Some(value) = last(&self.launch, variable) {
-            return Lookup::Set(value, self.launch_by);
+        // The last value given to `variable` wins, as the shell and a dict keep.
+        if let Some((_, value, set_by)) =
+            self.launch.iter().rev().find(|(name, ..)| name == variable)
+        {
+            return Lookup::Set(value, *set_by);
         }
         if let Some(why) = &self.launch_unseen {
             return Lookup::Unseen(why);
         }
-        if let Some(value) = last(&self.settings, variable) {
+        if let Some((_, value)) = self
+            .settings
+            .iter()
+            .rev()
+            .find(|(name, _)| name == variable)
+        {
             return Lookup::Set(value, SetBy::UserSettings);
         }
         match &self.settings_unseen {
@@ -256,15 +275,6 @@ impl Environment {
             None => Lookup::Unset,
         }
     }
-}
-
-/// The last value given to `variable`, as the shell and a dict both keep.
-fn last<'v>(values: &'v [(String, String)], variable: &str) -> Option<&'v str> {
-    values
-        .iter()
-        .rev()
-        .find(|(name, _)| name == variable)
-        .map(|(_, value)| value.as_str())
 }
 
 /// One switch a launch sets, and what it does to its flag.

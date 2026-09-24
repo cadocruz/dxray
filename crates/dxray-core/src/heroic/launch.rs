@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::{Json, Store};
+use crate::nvapi::SetBy;
 
 /// One game's Proton launch, as Heroic would make it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,8 +15,8 @@ pub struct Launch {
     /// `winePrefix`, which Heroic passes as `STEAM_COMPAT_DATA_PATH`.
     pub prefix: PathBuf,
     /// The game's environment options, then the NVAPI switch Heroic sets over
-    /// them.
-    pub environment: Vec<(String, String)>,
+    /// them, each naming its source.
+    pub environment: Vec<(String, String, SetBy)>,
     /// The `SteamAppId` Proton sees, or why it is not known.
     pub appid: Result<String, String>,
 }
@@ -90,8 +91,8 @@ impl<'a> Settings<'a> {
 /// The environment options, quotes stripped as Heroic strips them, then the
 /// switch `autoInstallDxvkNvapi` sets. Heroic applies that switch last, so it
 /// wins over an option with the same name.
-fn environment(settings: &Settings<'_>) -> Vec<(String, String)> {
-    let mut environment: Vec<(String, String)> = settings
+fn environment(settings: &Settings<'_>) -> Vec<(String, String, SetBy)> {
+    let mut environment: Vec<(String, String, SetBy)> = settings
         .get("enviromentOptions")
         .and_then(Json::array)
         .unwrap_or_default()
@@ -99,19 +100,26 @@ fn environment(settings: &Settings<'_>) -> Vec<(String, String)> {
         .filter_map(|option| {
             let key = option.get("key").and_then(Json::string)?;
             let value = option.get("value").and_then(Json::string)?;
-            Some((key.to_owned(), unquote(value).to_owned()))
+            Some((key.to_owned(), unquote(value).to_owned(), SetBy::Heroic))
         })
         .collect();
     let nvapi = settings
         .get("autoInstallDxvkNvapi")
         .and_then(Json::bool)
         .unwrap_or(NVAPI_BY_DEFAULT);
-    if nvapi {
-        environment.push(("PROTON_ENABLE_NVAPI".to_owned(), "1".to_owned()));
-        environment.push(("DXVK_NVAPI_ALLOW_OTHER_DRIVERS".to_owned(), "1".to_owned()));
+    let set = if nvapi {
+        [
+            ("PROTON_ENABLE_NVAPI", "1"),
+            ("DXVK_NVAPI_ALLOW_OTHER_DRIVERS", "1"),
+        ]
+        .as_slice()
     } else {
-        environment.push(("PROTON_DISABLE_NVAPI".to_owned(), "1".to_owned()));
-    }
+        [("PROTON_DISABLE_NVAPI", "1")].as_slice()
+    };
+    environment.extend(
+        set.iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned(), SetBy::HeroicSwitch)),
+    );
     environment
 }
 

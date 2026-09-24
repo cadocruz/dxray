@@ -216,6 +216,7 @@ fn a_game_with_no_prefix_is_a_sentence_rather_than_an_error() {
     // A game never launched under Proton is not an error.
     let answer = super::Builds::default().answer(None, Path::new("/definitely/not/here"), 440);
 
+    assert_eq!(answer.basis, super::Basis::NeverLaunched);
     assert!(
         answer.verdict.starts_with("not determined"),
         "expected a sentence, got {:?}",
@@ -303,6 +304,16 @@ fn a_launch_option_that_forces_nvapi_is_the_answer_and_the_last_launch_confirms_
     let answer = Launched::new("forced", "PROTON_FORCE_NVAPI=1 %command%", "True").answer();
 
     assert_eq!(answer.available, Some(true), "{}", answer.verdict);
+    let super::Basis::Read(evaluation) = &answer.basis else {
+        panic!("a read build, got {:?}", answer.basis);
+    };
+    assert_eq!(evaluation.appid.as_deref(), Some("1088850"));
+    assert_eq!(evaluation.recorded, Some(true));
+    assert!(!evaluation.disagrees());
+    let Some(crate::nvapi::Resolution::Computed { applied, .. }) = &evaluation.resolution else {
+        panic!("computed, got {:?}", evaluation.resolution);
+    };
+    assert_eq!(applied[0].set_by, crate::nvapi::SetBy::LaunchOptions);
     for part in [
         "PROTON_FORCE_NVAPI=1 in launch options adds forcenvapi",
         "the script alone says: NVAPI is withheld",
@@ -337,6 +348,11 @@ fn a_record_that_contradicts_the_prediction_leaves_the_answer_unsettled() {
     let answer = Launched::new("contradicted", "", "True").answer();
 
     assert_eq!(answer.available, None, "{}", answer.verdict);
+    assert!(
+        matches!(&answer.basis, super::Basis::Read(evaluation) if evaluation.disagrees()),
+        "{:?}",
+        answer.basis
+    );
     assert!(answer.verdict.contains("disagrees"), "{}", answer.verdict);
 }
 
@@ -432,10 +448,17 @@ fn heroic_turning_nvapi_support_off_withholds_it_through_proton_own_switch() {
     assert!(
         answer
             .verdict
-            .contains("PROTON_DISABLE_NVAPI=1 in Heroic's settings adds disablenvapi"),
+            .contains("PROTON_DISABLE_NVAPI=1 in Heroic's DXVK-NVAPI setting adds disablenvapi"),
         "{}",
         answer.verdict
     );
+    let super::Basis::Read(evaluation) = &answer.basis else {
+        panic!("a read build, got {:?}", answer.basis);
+    };
+    let Some(crate::nvapi::Resolution::Computed { applied, .. }) = &evaluation.resolution else {
+        panic!("computed, got {:?}", evaluation.resolution);
+    };
+    assert_eq!(applied[0].set_by, crate::nvapi::SetBy::HeroicSwitch);
 }
 
 #[test]
@@ -472,7 +495,7 @@ fn a_heroic_environment_option_is_applied_like_a_launch_option() {
     assert!(
         answer
             .verdict
-            .contains("PROTON_FORCE_NVAPI=1 in Heroic's settings adds forcenvapi"),
+            .contains("PROTON_FORCE_NVAPI=1 in Heroic's environment options adds forcenvapi"),
         "{}",
         answer.verdict
     );
@@ -494,5 +517,11 @@ fn an_appid_umu_has_not_supplied_leaves_only_the_last_launch_to_report() {
             && answer.verdict.contains("recorded use_nvapi=True"),
         "{}",
         answer.verdict
+    );
+    assert!(
+        matches!(&answer.basis, super::Basis::Read(evaluation)
+            if evaluation.appid.is_none() && evaluation.recorded == Some(true)),
+        "{:?}",
+        answer.basis
     );
 }

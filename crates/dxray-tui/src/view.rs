@@ -1011,6 +1011,7 @@ mod tests {
                 verdict: "not configured".to_owned(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         }
     }
@@ -1322,6 +1323,7 @@ mod tests {
                 verdict: "not configured".to_owned(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         )
     }
@@ -1918,6 +1920,7 @@ mod tests {
                 "if not os.environ.get(\"PROTON_DISABLE_NVAPI_QUIRKS\"):".to_owned(),
                 "    ret.add(\"disablenvapi\")".to_owned(),
             ],
+            basis: dxray_core::proton::Basis::Unread,
         };
         app.update(Msg::Game(Box::new(entry)));
 
@@ -2258,6 +2261,7 @@ mod tests {
                 verdict: "not configured".to_owned(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         );
         app.update(Msg::Game(Box::new(entry)));
@@ -2309,6 +2313,7 @@ mod tests {
                 verdict: "not configured".to_owned(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         );
         assert!(entry.lacks_evidence(), "the row has to carry all three");

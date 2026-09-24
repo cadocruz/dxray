@@ -440,6 +440,7 @@ mod tests {
                 verdict: String::new(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         }
     }
@@ -498,6 +499,7 @@ mod tests {
                 verdict: String::new(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         )
     }
@@ -545,6 +547,7 @@ mod tests {
                 verdict: String::new(),
                 available: None,
                 condition: Vec::new(),
+                basis: dxray_core::proton::Basis::Unread,
             },
         ))));
 

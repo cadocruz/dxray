@@ -260,11 +260,66 @@ pub struct Answer {
     /// The sentence, ready to print.
     pub verdict: String,
     /// Whether Proton offers this game NVAPI; `None` when that is not settled.
-    /// Only fit for colouring the sentence beside it.
+    /// Drawn from [`Answer::basis`].
     pub available: Option<bool>,
     /// The condition the flag is set under, quoted verbatim for the reader to
     /// apply.
     pub condition: Vec<String>,
+    /// What the answer rests on, for a consumer that acts on it rather than
+    /// prints it. The verdict is written from this.
+    pub basis: Basis,
+}
+
+/// What an [`Answer`] rests on.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Basis {
+    /// No Proton policy reaches this game.
+    NotApplicable,
+    /// The game has no prefix yet: it was never launched under Proton.
+    NeverLaunched,
+    /// Something the answer needs could not be read; the verdict says what.
+    #[default]
+    Unread,
+    /// A build's policy was read.
+    Read(Evaluation),
+}
+
+/// A build's policy applied to one game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Evaluation {
+    /// The `SteamAppId` Proton sees; `None` when it is not known.
+    pub appid: Option<String>,
+    /// What the script's own lists say. `None` without an appid.
+    pub decision: Option<Decision>,
+    /// What the launch environment makes of them. `None` without an appid.
+    pub resolution: Option<Resolution>,
+    /// The `use_nvapi` value the last launch wrote to `config_info`.
+    pub recorded: Option<bool>,
+}
+
+impl Evaluation {
+    /// What the policy and the launch environment predict for `use_nvapi`.
+    #[must_use]
+    pub fn predicted(&self) -> Option<bool> {
+        match (&self.resolution, &self.decision) {
+            (Some(Resolution::Computed { use_nvapi, .. }), _) => Some(*use_nvapi),
+            (Some(Resolution::Default), Some(decision)) => decision.available(),
+            _ => None,
+        }
+    }
+
+    /// True when the last launch recorded the opposite of the prediction.
+    #[must_use]
+    pub fn disagrees(&self) -> bool {
+        matches!((self.predicted(), self.recorded), (Some(predicted), Some(recorded)) if predicted != recorded)
+    }
+
+    /// Whether Proton offers NVAPI: the prediction, unless the last launch
+    /// contradicts it.
+    #[must_use]
+    pub fn available(&self) -> Option<bool> {
+        self.predicted().filter(|_| !self.disagrees())
+    }
 }
 
 impl Answer {
@@ -281,16 +336,18 @@ impl Answer {
             ),
             available: None,
             condition: Vec::new(),
+            basis: Basis::NotApplicable,
         }
     }
 
     /// A game whose Proton could not be found or read at all.
-    fn undetermined(reason: &str) -> Self {
+    fn undetermined(reason: &str, basis: Basis) -> Self {
         Self {
             script: None,
             verdict: format!("not determined: {reason}"),
             available: None,
             condition: Vec::new(),
+            basis,
         }
     }
 }
@@ -338,31 +395,28 @@ impl Builds {
                 .or_insert_with(|| crate::steam::launch::launches(root))
                 .environment(appid)
         });
-        self.answer_in(
-            &compatdata(library, appid),
-            launch,
-            SetBy::LaunchOptions,
-            Ok(appid.to_string()),
-        )
+        let launch = launch.map(|values| {
+            values
+                .into_iter()
+                .map(|(name, value)| (name, value, SetBy::LaunchOptions))
+                .collect()
+        });
+        self.answer_in(&compatdata(library, appid), launch, Ok(appid.to_string()))
     }
 
     /// The same for a Heroic game, `app_name` from `store`, under the Heroic
     /// configuration `root`.
     pub fn answer_heroic(&mut self, root: &Path, store: Store, app_name: &str) -> Answer {
         match crate::heroic::launch::launch(root, store, app_name) {
-            Ok(launch) => self.answer_in(
-                &launch.prefix,
-                Ok(launch.environment),
-                SetBy::Heroic,
-                launch.appid,
-            ),
+            Ok(launch) => self.answer_in(&launch.prefix, Ok(launch.environment), launch.appid),
             Err(NoLaunch::NotProton(runner)) => Answer {
                 script: None,
                 verdict: format!("not applicable: Heroic runs this game with {runner}, not Proton"),
                 available: None,
                 condition: Vec::new(),
+                basis: Basis::NotApplicable,
             },
-            Err(NoLaunch::Unknown(why)) => Answer::undetermined(&why),
+            Err(NoLaunch::Unknown(why)) => Answer::undetermined(&why, Basis::Unread),
         }
     }
 
@@ -371,13 +425,19 @@ impl Builds {
     fn answer_in(
         &mut self,
         prefix: &Path,
-        launch: std::result::Result<Vec<(String, String)>, String>,
-        launch_by: SetBy,
+        launch: std::result::Result<Vec<(String, String, SetBy)>, String>,
         appid: std::result::Result<String, String>,
     ) -> Answer {
         let script = match from_prefix(prefix) {
             Ok(script) => script,
-            Err(error) => return Answer::undetermined(&error.to_string()),
+            Err(error) => {
+                let basis = if error.is_absent() {
+                    Basis::NeverLaunched
+                } else {
+                    Basis::Unread
+                };
+                return Answer::undetermined(&error.to_string(), basis);
+            }
         };
         let build = self.read.entry(script.clone()).or_insert_with(|| {
             read(&script)
@@ -396,6 +456,7 @@ impl Builds {
                     verdict: format!("not determined: this script was not understood: {error}"),
                     available: None,
                     condition: Vec::new(),
+                    basis: Basis::Unread,
                 };
             }
         };
@@ -406,20 +467,27 @@ impl Builds {
         let appid = match appid {
             Ok(appid) => appid,
             Err(why) => {
-                let mut answer = Answer {
+                let evaluation = Evaluation {
+                    appid: None,
+                    decision: None,
+                    resolution: None,
+                    recorded,
+                };
+                let mut verdict = format!("not determined: {why}");
+                witness(&mut verdict, &evaluation);
+                return Answer {
                     script: Some(script),
-                    verdict: format!("not determined: {why}"),
+                    verdict,
                     available: None,
                     condition: Vec::new(),
+                    basis: Basis::Read(evaluation),
                 };
-                witness(&mut answer, recorded);
-                return answer;
             }
         };
-        let environment = Environment::new(launch, &build.settings).launched_by(launch_by);
+        let environment = Environment::sourced(launch, &build.settings);
         let decision = crate::nvapi::decide(&build.reading, &appid);
         let resolution = crate::nvapi::resolve(&build.reading, &appid, &environment);
-        compose(script, &decision, &resolution, recorded)
+        compose(script, appid, decision, resolution, recorded)
     }
 }
 
@@ -427,8 +495,9 @@ impl Builds {
 /// give between them.
 fn compose(
     script: PathBuf,
-    decision: &Decision,
-    resolution: &Resolution,
+    appid: String,
+    decision: Decision,
+    resolution: Resolution,
     recorded: Option<bool>,
 ) -> Answer {
     let condition = || {
@@ -437,8 +506,8 @@ fn compose(
             .map(crate::nvapi::Condition::source)
             .unwrap_or_default()
     };
-    let (verdict, available, condition) = match resolution {
-        Resolution::Default => (decision.to_string(), decision.available(), condition()),
+    let (mut verdict, condition) = match &resolution {
+        Resolution::Default => (decision.to_string(), condition()),
         Resolution::Computed { use_nvapi, applied } => {
             let how: Vec<String> = applied.iter().map(Applied::describe).collect();
             (
@@ -447,46 +516,43 @@ fn compose(
                     if *use_nvapi { "offered" } else { "withheld" },
                     how.join(", ")
                 ),
-                Some(*use_nvapi),
                 Vec::new(),
             )
         }
         Resolution::Undetermined(why) => (
             format!("not determined: {why}; the script alone says: {decision}"),
-            None,
             condition(),
         ),
     };
-    let mut answer = Answer {
+    let evaluation = Evaluation {
+        appid: Some(appid),
+        decision: Some(decision),
+        resolution: Some(resolution),
+        recorded,
+    };
+    witness(&mut verdict, &evaluation);
+    Answer {
         script: Some(script),
         verdict,
-        available,
+        available: evaluation.available(),
         condition,
-    };
-    witness(&mut answer, recorded);
-    answer
+        basis: Basis::Read(evaluation),
+    }
 }
 
-/// Appends what the last launch recorded, and unsettles an answer it
-/// contradicts.
-fn witness(answer: &mut Answer, recorded: Option<bool>) {
-    let Some(recorded) = recorded else {
+/// Appends what the last launch recorded, and says so when it contradicts the
+/// prediction.
+fn witness(verdict: &mut String, evaluation: &Evaluation) {
+    let Some(recorded) = evaluation.recorded else {
         return;
     };
     let spelled = if recorded { "True" } else { "False" };
-    let _ = write!(
-        answer.verdict,
-        "; the last launch recorded use_nvapi={spelled}"
-    );
-    if answer
-        .available
-        .is_some_and(|expected| expected != recorded)
-    {
-        answer.verdict.push_str(
+    let _ = write!(verdict, "; the last launch recorded use_nvapi={spelled}");
+    if evaluation.disagrees() {
+        verdict.push_str(
             ", which disagrees: the options changed since, or something this reader \
              does not see sets it",
         );
-        answer.available = None;
     }
 }
 

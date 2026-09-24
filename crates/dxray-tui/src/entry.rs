@@ -232,6 +232,7 @@ mod tests {
             verdict: "not configured".to_owned(),
             available: None,
             condition: Vec::new(),
+            basis: dxray_core::proton::Basis::Unread,
         }
     }
 
