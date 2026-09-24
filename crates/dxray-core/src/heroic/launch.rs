@@ -126,8 +126,8 @@ fn unquote(value: &str) -> &str {
 }
 
 /// The id umu turns into `SteamAppId`: what follows `umu-` in the game's umu
-/// id, which Heroic caches in `store_cache/umu.json`. With no id, umu runs the
-/// game as `umu-default`.
+/// id, which Heroic caches in `store_cache/umu.json`. With no id Heroic keeps
+/// the `GAMEID=umu-0` it always sets first.
 fn umu_appid(root: &Path, store: Store, app_name: &str) -> Result<String, String> {
     let path = root.join("store_cache/umu.json");
     let cache = read(&path)?;
@@ -140,7 +140,7 @@ fn umu_appid(root: &Path, store: Store, app_name: &str) -> Result<String, String
             })
             .unwrap_or("0")
             .to_owned()),
-        Some(Json::Other) => Ok("default".to_owned()),
+        Some(Json::Other) => Ok("0".to_owned()),
         _ => Err(
             "Heroic has not looked this game up in the umu database yet, and the umu id it \
              finds becomes the SteamAppId Proton reads its lists by"

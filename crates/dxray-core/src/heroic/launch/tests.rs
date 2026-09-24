@@ -90,8 +90,8 @@ fn with_no_nvapi_setting_anywhere_heroic_enables_it() {
     );
     assert_eq!(
         launch.appid,
-        Ok("default".to_owned()),
-        "no umu id: umu runs the game as umu-default"
+        Ok("0".to_owned()),
+        "measured: with no umu id Heroic passes GAMEID=umu-0"
     );
 }
 
