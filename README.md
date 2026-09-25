@@ -123,6 +123,38 @@ Start the terminal browser:
 dxray-tui
 ```
 
+## Example output
+
+The terminal browser keeps the inventory compact while leaving the evidence
+and compatibility details available on the right:
+
+![A Plague Tale inventory details in dxray-tui](assets/d3-tui-apt.png)
+
+The same view makes the difference between static DLSS evidence and a renderer
+that cannot be determined from imports explicit:
+
+![Marvel's Guardians of the Galaxy inventory details in dxray-tui](assets/d3-tui-gotg.png)
+
+The command-line view is designed for scripts and logs. This is a shortened,
+sanitized excerpt from a real Steam and Heroic inventory:
+
+```text
+$ dxray installed
+Steam
+  PAYDAY 2                         Direct3D 11       NVAPI: offered
+  Marvel's Guardians of the Galaxy no API determined NVAPI: offered
+  Installations without game evidence
+    Life is Strange                 no executable
+Heroic
+  A Plague Tale: Innocence          Direct3D 11       NVAPI: offered
+  Honkai: Star Rail                 OpenGL             NVAPI: offered
+  Rocket League                     Direct3D 11       NVAPI: offered
+  Sonic Mania                       Direct3D 9        NVAPI: offered
+
+11 games in 3 libraries across 3 installs; the scan reports its caveats
+explicitly when a file, record or directory could not be read completely.
+```
+
 ### Commands
 
 | Command | What it does | Argument |
